@@ -4774,7 +4774,11 @@ local function warpCycle()
 
 		local got, tried = 0, 0
 		local qi = 0
-		while got < chainGrab and tried < chainGrab * 2 do
+		-- นับการลองซ้ำต่อไข่หนึ่งใบ  ใบละครั้งเดียว (ดูสองจุดที่ใช้ข้างล่าง)
+		local eggRetry = {}
+		-- โควตาต้องเผื่อการลองซ้ำด้วย ไม่งั้นลองซ้ำไปสองสามใบก็หมดโควตาแล้ว
+		-- ของเดิม chainGrab * 2 = 10 ครั้งสำหรับ 5 ใบ พอมีลองซ้ำจะไม่พอ
+		while got < chainGrab and tried < chainGrab * 3 do
 			if not Config.Running or not alive() then break end
 
 			-- กล่องขึ้นกลางคัน = เลิกทันที ไม่ต้องรอให้เก็บพลาดก่อน
@@ -4823,7 +4827,22 @@ local function warpCycle()
 			-- ใบนี้ไปไม่ได้ก็ข้ามไปใบถัดไป ยังมีอีกสี่สิบใบรอในสนาม
 			-- (ผู้ใช้รายงานตรงกัน: เก็บไม่ครบ 5 ใบสักที)
 			if not move(nextEgg.BottomCFrame.Position + Vector3.new(0, 3, 0)) then
-				Hub.SkipEgg = (Hub.SkipEgg or 0) + 1
+				-- วาปพลาดครั้งเดียวห้ามทิ้งไข่ใบนั้น  ลองซ้ำก่อนหนึ่งครั้ง
+				--
+				-- ของเดิม continue ทันที = qi เลื่อนไปใบถัดไป ใบนี้ถูกทิ้งถาวร
+				-- ซึ่งมักเป็นใบที่แพงที่สุด เพราะคิวเรียงจากแพงไปถูก
+				-- (ผู้ใช้รายงานตรงๆ: "ไปเก็บไข่ราคาดีสุดไม่ได้ มันไม่ยอมเช็คไปเก็บซ้ำ
+				--  มันเมินไข่นั้นเลย")
+				--
+				-- การวาปพลาดส่วนใหญ่เป็นเหตุชั่วคราว เช่นเซิร์ฟยังไม่รับตำแหน่ง
+				-- ลองใหม่จากจุดกลางอีกรอบมักผ่าน  ทิ้งเลยคือเสียของแพงฟรีๆ
+				-- จำกัดใบละครั้งเดียว ไม่งั้นวนอยู่ใบเดียวจนหมดโควตา tried
+				eggRetry[nextEgg.Uid] = (eggRetry[nextEgg.Uid] or 0) + 1
+				if eggRetry[nextEgg.Uid] <= 1 then
+					qi = qi - 1   -- ใบเดิม ลองอีกรอบ
+				else
+					Hub.SkipEgg = (Hub.SkipEgg or 0) + 1
+				end
 				continue
 			end
 
@@ -4925,6 +4944,20 @@ local function warpCycle()
 				move(warpHome)
 				Hub.BoxAborts = (Hub.BoxAborts or 0) + 1
 				break
+
+			else
+				-- เซิร์ฟปฏิเสธด้วยเหตุอื่น  ลองใบเดิมซ้ำหนึ่งครั้งก่อนทิ้ง
+				--
+				-- ของเดิมไม่มีสาขานี้ พอไม่ตรงเงื่อนไขไหนเลยก็ปล่อยให้ qi เลื่อนไปใบถัดไป
+				-- ใบแพงสุดจึงหลุดมือตั้งแต่ครั้งแรกที่เซิร์ฟตอบอะไรที่เราไม่รู้จัก
+				-- ใช้ตัวนับเดียวกับตอนวาปพลาด ใบละครั้งเดียวเหมือนกัน
+				eggRetry[nextEgg.Uid] = (eggRetry[nextEgg.Uid] or 0) + 1
+				if eggRetry[nextEgg.Uid] <= 1 then
+					task.wait(0.15)
+					qi = qi - 1
+				else
+					Hub.SkipEgg = (Hub.SkipEgg or 0) + 1
+				end
 			end
 		end
 
