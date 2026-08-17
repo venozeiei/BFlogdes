@@ -92,7 +92,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "slow-start-320"
+Hub.Build = "netwatch-320"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -828,6 +828,19 @@ local globalConfigLoaded = loadGlobalConfig()
 -- ปิดตายไว้เลย ใครจะตั้งอะไรมาก็ไม่มีผล  ยอมเสียความยืดหยุ่นแลกกับลูกค้าไม่หลุด
 Config.Noclip = false
 Config.BlockDeath = false
+
+-- การบล็อกรายงานความผิดต้องปิดตายไว้ก่อน ห้ามให้ไฟล์บนดิสก์เปิดได้
+--
+-- ต่างจากคีย์อื่นทั้งหมดในไฟล์นี้: ทุกตัวที่ผ่านมาแค่เปลี่ยนวิธีเดินของตัวเราเอง
+-- ตัวนี้เข้าไปกลืนข้อความที่เกมพยายามส่งขึ้นเซิร์ฟ = แทรกแซงระบบกันโกงตรงๆ
+-- ถ้าเดาผิดเรื่องช่องทาง มันอาจกลืนของที่เกมต้องใช้จริงแล้วเกิดอาการใหม่ที่แย่กว่าเดิม
+--
+-- ตอนนี้ยังไม่มีหลักฐานว่ารายงานวิ่งผ่าน Network.Fire (ดู Hub.watchNetwork)
+-- จึงเปิดได้เฉพาะตอนที่ Hub.NetSeen ยืนยันแล้วเท่านั้น และต้องตั้งใน loader เอง
+Config.MuteViolation = Config.MuteViolation == true
+
+-- ตัวเฝ้า (นับเฉยๆ ไม่บล็อก) เปิดไว้ตลอด มันเป็นข้อมูลชิ้นเดียวที่จะไล่ต่อได้
+Config.NetWatch = Config.NetWatch ~= false
 
 -- โหมดเคลื่อนที่ต้องเริ่มที่ warp เสมอ ห้ามให้ไฟล์บนดิสก์กำหนด
 --
@@ -2186,6 +2199,196 @@ Hub.acState = function()
 		Hub.ACStateTries = 0
 	end
 	return found
+end
+
+-- เฝ้าช่องทางที่ไคลเอนต์คุยกับเซิร์ฟ  (ค่าเริ่มต้น = ดูเฉยๆ ไม่บล็อกอะไร)
+--
+-- ทำไมมาทางนี้:
+--
+-- อ่าน ReplicatedStorage/Library/Client/Network.luau ทั้งไฟล์แล้ว ทุกอย่างที่ไคลเอนต์
+-- ส่งขึ้นเซิร์ฟผ่านฟังก์ชันเดียว  บรรทัด 169-186:
+--     Fire = function(name, ...)
+--         local r = _remoteEvent(name)          -- หา RemoteEvent ชื่อนั้นใน ReplicatedStorage.Network
+--         if r then task.spawn(function(...) r:FireServer(...) end, ...) return end
+--         _bindableEventTx(name):Fire(...)      -- ไม่มีรีโมท = ยิงในเครื่องเฉยๆ
+--     end
+--
+-- สำคัญ: `Fire` เป็นฟังก์ชัน Lua ธรรมดาในตารางที่โมดูล return ออกมา
+-- ครอบตัวนี้ = ไม่ได้แตะของ Roblox เลย  ซึ่งตรงกับที่วัดจากเครื่องที่ "รันคู่
+-- Speed Hub X แล้วหายขาด" ทุกข้อ: FireServer ยัง native=true · game mt ยัง
+-- readonly=true · AC ยังเดิน ThreatLevel ยังขึ้น  แต่ไม่โดนเตะ
+--
+-- แก้ความเข้าใจผิดของผมเองรอบก่อน:
+-- ผมเคยเขียนว่าโค้ดกันโกงยิง BindableEvent แล้ว Network ส่งต่อ  ผิด
+-- สะพาน BindableEvent -> FireServer (บรรทัด 27-34) ต่อให้ "เฉพาะตัวที่ถูกสร้างไว้
+-- ก่อนแล้ว" คือเฉพาะกรณีที่เกมยิง endpoint ก่อน RemoteEvent จะ replicate มาถึง
+-- พอ RemoteEvent มาถึงแล้ว `Fire` วิ่งเข้า FireServer ตรงๆ ไม่ผ่าน BindableEvent อีก
+-- ตัดสะพานนั้นจึงได้ผลแค่เสี้ยววินาทีตอนเข้าเกม  ไม่ใช่ทางแก้
+--
+-- และที่ยังไม่รู้ (พูดตรงๆ): ไฟล์ที่ dump มาไม่มีตัวที่ยิงรายงานเลย
+--     INTEGRITY_VIOLATION เจอที่เดียว = ไฟล์ประกาศค่าคงที่ ไม่มีคนเรียก
+--     KickQueued เจอที่เดียว = Runtime.luau:269 ตอนตั้งค่าเริ่มต้น ไม่มีใครอ่าน
+--     FireServer/InvokeServer ในโมดูลกันโกงทั้ง 15 ไฟล์ = 0 ครั้ง
+-- แปลว่าคนยิงอยู่ในไฟล์ที่ถูกเข้ารหัสไว้ (PhaseGate · Restore · Exchange ฯลฯ
+-- ไฟล์ละ 4,000+ บรรทัดที่เป็น VM ตัวแปลอีกชั้น อ่านสตริงไม่ได้)
+--
+-- เพราะฉะนั้นตัวนี้จึงเริ่มจาก "ดูเฉยๆ" ก่อน  ไม่บล็อกอะไรทั้งนั้น
+-- มันแค่นับว่ามี endpoint ชื่ออะไรถูกยิงขึ้นไปกี่ครั้ง เก็บไว้ที่ Hub.NetSeen
+-- ถ้าลูกค้าโดนเตะแล้วเห็น NetSeen["ClientCharacter: IntegrityViolation"] > 0
+-- = ยืนยันว่าทางนี้ถูก แล้วค่อยเปิด Config.MuteViolation = true
+-- ถ้าโดนเตะแต่เลขยังเป็น 0 = รายงานไม่ได้ไปทางนี้ ต้องเลิกทางนี้ทั้งเส้น
+--
+-- ห้ามบล็อกช่องอื่นเด็ดขาด (Sync · Update · Ready)
+-- Runtime.luau มี InvalidHeartbeatCount = เซิร์ฟนับจังหวะที่ไคลเอนต์ขาดการรายงาน
+-- ตัดทั้งช่องคือโดนจับอีกทางหนึ่ง
+--
+-- และห้ามบล็อก Invoke ไม่ว่ากรณีใด  มันเป็นแบบถาม-ตอบ ถ้ากลืนคำถามทิ้ง
+-- ฝั่งเกมจะค้างรอคำตอบที่ไม่มีวันมา
+-- อยู่บน Hub ไม่ใช่ local ธรรมดา  สองเหตุผล:
+--   1) ไฟล์นี้ใช้ตัวแปรระดับบนสุดไป 198 จาก 200 ตัวที่ Luau ยอมให้  เพิ่มอีกตัวคือเสี่ยง
+--   2) อยู่บน Hub แล้วลูกค้าแก้สดได้ตอนทดสอบ ไม่ต้องอัปไฟล์ใหม่:
+--        getgenv().EGG_FARM_HUB.MuteEndpoints["ชื่อ endpoint"] = true
+Hub.MuteEndpoints = {
+	["ClientCharacter: IntegrityViolation"] = true,
+}
+
+Hub.watchNetwork = function()
+	if Config.NetWatch == false then return false end
+	if Hub.NetHooked then return true end
+
+	local RS = game:GetService("ReplicatedStorage")
+	local lib = RS:FindFirstChild("Library")
+	local cli = lib and lib:FindFirstChild("Client")
+	local mod = cli and cli:FindFirstChild("Network")
+	if not mod or not mod:IsA("ModuleScript") then return false end
+
+	-- require คืนตารางตัวเดิมที่เกมใช้อยู่ (Roblox แคชผลของโมดูลไว้ต่อ VM)
+	-- ไม่ต้องสแกน getgc เลย  ไม่กินแรมและไม่มีจังหวะพลาด
+	local ok, net = pcall(require, mod)
+	if not ok or type(net) ~= "table" or type(net.Fire) ~= "function" then
+		Hub.NetSkipped = "require Network ไม่สำเร็จ"
+		return false
+	end
+
+	Hub.NetSeen = Hub.NetSeen or {}
+	local seen = Hub.NetSeen
+
+	-- อ่าน Hub.MuteEndpoints สดทุกครั้ง ไม่เก็บเป็นตัวแปรไว้
+	-- เพื่อให้แก้รายชื่อได้ระหว่างเกมกำลังรัน  ค่าใช้จ่ายคือ hash lookup 2 ครั้งต่อการยิง
+	local function note(name)
+		seen[name] = (seen[name] or 0) + 1
+		local mute = Hub.MuteEndpoints
+		if mute and mute[name] then
+			Hub.ViolationFires = (Hub.ViolationFires or 0) + 1
+			Hub.ViolationFiredAt = os.clock()
+			Hub.ViolationName = name
+		end
+	end
+
+	-- แยกเป็นฟังก์ชันเดียว ไม่เขียนเงื่อนไขซ้ำสองที่ในตัวครอบข้างล่าง
+	local function shouldDrop(mayDrop, name)
+		if not mayDrop or not Config.MuteViolation then return false end
+		local mute = Hub.MuteEndpoints
+		return (mute and mute[name]) == true
+	end
+
+	-- Fire ถูกเรียกแบบจุด (Network.Fire(name, ...)) ตามที่อ่านจากตัวไฟล์
+	-- แต่เผื่อไว้ให้รองรับแบบทวิภาค (Network:Fire(name, ...)) ด้วย
+	-- ไม่งั้นถ้าเดาผิดจะกลืนอาร์กิวเมนต์ผิดตัวแล้วเกมพัง
+	local function wrap(real, mayDrop)
+		return function(a, ...)
+			if type(a) == "string" then
+				note(a)
+				if shouldDrop(mayDrop, a) then
+					Hub.ViolationDropped = (Hub.ViolationDropped or 0) + 1
+					return
+				end
+				return real(a, ...)
+			end
+			local name = ...
+			if type(name) == "string" then
+				note(name)
+				if shouldDrop(mayDrop, name) then
+					Hub.ViolationDropped = (Hub.ViolationDropped or 0) + 1
+					return
+				end
+			end
+			return real(a, ...)
+		end
+	end
+
+	if type(setreadonly) == "function" then pcall(setreadonly, net, false) end
+
+	-- ของจริงต้องเก็บไว้ในที่ที่อยู่รอดข้ามการรันซ้ำ แต่ห้ามอยู่บนตารางของเกม
+	--
+	-- ทำไมไม่เก็บบน Hub: ถ้าลูกค้ารันสคริปต์ซ้ำในรอบเดียวกัน Hub เป็นตัวใหม่
+	-- แต่ net.Fire ยังเป็นตัวครอบของรอบเก่า  จะครอบซ้อนกันไปเรื่อยๆ
+	-- รันซ้ำ 5 ครั้ง = ทุกข้อความวิ่งผ่าน 5 ชั้น และ 4 ชั้นเขียนสถิติลง Hub ที่ตายแล้ว
+	--
+	-- ทำไมไม่เก็บบนตาราง Network เอง: นั่นคือการเพิ่มคีย์ใหม่เข้าไปในตารางของเกม
+	-- ถ้ามีที่ไหนวน pairs() ตารางนั้น (หรือระบบกันโกงเช็คว่ามีคีย์แปลกปลอมไหม)
+	-- เราจะทิ้งร่องรอยไว้เอง  เก็บในตารางรวมของเราแทน ตารางของเกมไม่เปลี่ยนเลย
+	-- ใช้ genv (บรรทัด 55) ไม่ใช่ getgenv() ตรงๆ  บาง executor ไม่มีฟังก์ชันนั้น
+	local REG = genv.__HAMSTER_NETREG
+	if type(REG) ~= "table" then
+		REG = setmetatable({}, { __mode = "k" })   -- อ้างอิงแบบอ่อน ไม่กันไม่ให้ถูกเก็บกวาด
+		genv.__HAMSTER_NETREG = REG
+	end
+
+	-- ถอดของรอบเก่าคืนก่อน แล้วค่อยครอบใหม่ชั้นเดียว
+	local prev = REG[net]
+	if type(prev) == "table" then
+		pcall(function()
+			if type(prev.Fire) == "function" then net.Fire = prev.Fire end
+			if type(prev.Invoke) == "function" then net.Invoke = prev.Invoke end
+		end)
+	end
+
+	local realFire = net.Fire
+	local realInvoke = net.Invoke
+	local wrote = pcall(function()
+		REG[net] = { Fire = realFire, Invoke = realInvoke }
+		net.Fire = wrap(realFire, true)
+		if type(realInvoke) == "function" then
+			net.Invoke = wrap(realInvoke, false)   -- นับเท่านั้น ห้ามกลืน
+		end
+	end)
+	if not wrote or net.Fire == realFire then
+		Hub.NetSkipped = "ตาราง Network เขียนทับไม่ได้"
+		return false
+	end
+
+	Hub.NetHooked = true
+	Hub.NetTable = net
+	log(Config.MuteViolation and "เฝ้าช่องเซิร์ฟ + บล็อกรายงานความผิด"
+		or "เฝ้าช่องเซิร์ฟแล้ว (ดูเฉยๆ ยังไม่บล็อก)")
+	return true
+end
+
+-- ถอดตัวเฝ้าออก คืนของจริงให้เกม  ใช้ตอนอยากตัดตัวนี้ออกจากสมการเวลาไล่บั๊ก
+Hub.unwatchNetwork = function()
+	local net = Hub.NetTable
+	local REG = genv.__HAMSTER_NETREG
+	if not net or type(REG) ~= "table" then return false end
+	local prev = REG[net]
+	if type(prev) ~= "table" then return false end
+	local ok = pcall(function()
+		if type(prev.Fire) == "function" then net.Fire = prev.Fire end
+		if type(prev.Invoke) == "function" then net.Invoke = prev.Invoke end
+		REG[net] = nil
+	end)
+	if ok then Hub.NetHooked = false ; log("ถอดตัวเฝ้าช่องเซิร์ฟแล้ว") end
+	return ok
+end
+
+-- เรียกดูรายชื่อ endpoint ที่ยิงขึ้นเซิร์ฟไปแล้ว เรียงจากมากไปน้อย
+Hub.netReport = function()
+	local t = {}
+	for k, v in pairs(Hub.NetSeen or {}) do t[#t + 1] = { k, v } end
+	table.sort(t, function(a, b) return a[2] > b[2] end)
+	local out = {}
+	for i = 1, #t do out[#out + 1] = ("%6d  %s"):format(t[i][2], t[i][1]) end
+	return table.concat(out, "\n")
 end
 
 -- ปิดระบบแก้ไขที่ตารางตั้งค่าโดยตรง  = ตัวที่แรงที่สุด
@@ -6513,7 +6716,15 @@ if Config.Trace ~= false and type(writefile) == "function" then
 						hum and tostring(hum:GetStateEnabled(Enum.HumanoidStateType.Dead)) or "?",
 						tostring(S.stolen), tostring(S.failed),
 						-- จำนวนครั้งที่ยิง placeF สะสม  ใช้ดูว่ายิงถี่เกินจนโดนตัวจำกัดอัตราไหม
-						"place " .. tostring(Hub.PlaceCalls or 0) .. "|" .. tostring(Hub.LastCarryMsg))
+						-- vio = จำนวนครั้งที่ไคลเอนต์ยิงรายงานความผิดขึ้นเซิร์ฟผ่าน Network.Fire
+						-- ถ้าลูกค้าโดนเตะแล้วบรรทัดท้ายๆ ขึ้น vio 1 = ยืนยันช่องทางถูก
+						-- ถ้าโดนเตะแต่ vio ยัง 0 ตลอด = รายงานไม่ได้ไปทางนี้ ต้องเลิกทางนี้
+						-- net = ติดตั้งตัวเฝ้าสำเร็จหรือยัง  false = เลข vio ไม่มีความหมาย
+						("place %s|vio %s|net %s|%s"):format(
+							tostring(Hub.PlaceCalls or 0),
+							tostring(Hub.ViolationFires or 0),
+							tostring(Hub.NetHooked == true),
+							tostring(Hub.LastCarryMsg)))
 				if #buf > MAX then table.remove(buf, 1) end
 				-- เขียนทับทั้งไฟล์ทุกครั้ง ไฟล์จึงไม่โตไม่จำกัด
 				writefile(TRACE, table.concat(buf, "\n"))
@@ -6568,8 +6779,18 @@ local function waitSettled(extra)
 	task.wait(math.max(0, tonumber(extra) or 0))
 end
 
+-- ตัวเฝ้าช่องเซิร์ฟต้องติดตั้งทันที ห้ามรอ StartupGrace
+--
+-- สองเหตุผล: (1) มันเบามาก แค่ require กับเขียนตาราง 2 ช่อง ไม่กระทบจังหวะเข้าเกม
+-- (2) ถ้าติดช้ากว่าที่ระบบกันโกงยิงรายงานครั้งแรก เราจะไม่เห็นครั้งนั้นเลย
+--    ซึ่งคือครั้งที่สำคัญที่สุด เพราะลูกค้าหลายคนโดนเตะภายในไม่กี่วินาทีแรก
+pcall(Hub.watchNetwork)
+
 task.spawn(function()
 	waitSettled(tonumber(Config.StartupGrace) or 15)
+
+	-- ตอนโหลด โมดูล Network อาจยังไม่ถูก require  ลองซ้ำหลังทุกอย่างนิ่ง
+	if not Hub.NetHooked then pcall(Hub.watchNetwork) end
 
 	if Config.SmoothCam then pcall(startSmoothCam) end
 	if Config.PerfMode then pcall(applyPerfSettings) end
