@@ -90,7 +90,9 @@ Hub.Brand = "Hamsterdiwa"
 Hub.Alive = true
 Hub.Gen = GEN
 Hub.Phase = "พัก"
-Hub.Build = "clean-700"
+-- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
+-- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
+Hub.Build = "slow-start-320"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -171,7 +173,20 @@ local Config = {
 	--
 	-- นี่คือกลไกเดียวกับที่โค้ดรุ่นก่อนเกมอัปเดตใช้ แล้ววาปเฟรมเดียวได้โดยไม่โดนดึงกลับ
 	-- ต้องมี debug.setupvalue ตัวรันที่ไม่มีจะข้ามไปเอง สคริปต์ยังทำงานได้ปกติ
-	LiftThreshold = true,
+	-- ปิดไว้เป็นค่าเริ่มต้น  เป็นสิ่งเดียวที่แก้โค้ดของเกม (debug.setupvalue)
+	-- และวัดแล้วไม่ได้ช่วย (ดันเป็นอนันต์แล้วที่ 700 ยังโดนดึงกลับ 42 ครั้ง)
+	-- ตัวที่ช่วยจริงคือ MoveSpeed 320
+	LiftThreshold = false,
+
+	-- ปิดระบบแก้ไขตำแหน่งของเกมที่ตารางตั้งค่า (CorrectionsEnabled = false)
+	--
+	-- ตัวนี้แรงกว่า LiftThreshold มาก เพราะเป็นสวิตช์ที่โมดูลอ่านก่อนลงมือทำอะไร
+	-- ปิดทีเดียวตัดทั้งการฆ่าและการลากกลับ
+	--
+	-- รุ่นก่อนเกมอัปเดตมีตัวนี้ และรุ่นนั้นไม่โดนเตะ
+	-- เปิดไว้เพราะหลักฐานชี้ทางนี้ (สคริปต์ที่ลูกค้ารันก่อนแล้วหาย น่าจะทำแบบเดียวกัน)
+	-- ต้องมี getgc  เครื่องที่ไม่มีจะข้ามไปเอง
+	KillCorrections = true,
 
 	-- ถึงที่หมายแล้วปล่อยโหมดยกเว้นหมดอายุ เพื่อให้เกมตั้งจุดตั้งต้นใหม่ให้ (ดู Hub.expireImpulse)
 	-- นี่คือกลไกของเกมเอง ไม่ใช่การหลอก  ปิดได้ถ้าอยากเทียบผล
@@ -195,6 +210,17 @@ local Config = {
 	-- ส่วน depositCarried ก็ตรึงตำแหน่งกลับทุก 0.08 วินาที = ตีกันไปมา ตัวสั่นไม่นิ่ง
 	-- (ผู้ใช้รายงาน: "ตอนนี้มัน bring ไปมาอย่างเดียวเลย ไม่นิ่งเหมือนโค้ดก่อน")
 	StallWatch = false,
+
+	-- หน่วงกี่วินาทีก่อนเริ่มสแกนหน่วยความจำ (แก้ Error 279)
+	--
+	-- getgc(true) บล็อกเธรดหลัก เครื่องแรง 148ms เครื่องช้าหรือมือถือเป็นวินาที
+	-- ถ้าไปบล็อกตอนการเชื่อมต่อยังไม่นิ่ง เซิร์ฟจะตัดสายทิ้ง = Error 279
+	-- (คนละเรื่องกับ 267 ซึ่งคือโดนเตะเพราะโกง)
+	--
+	-- ลูกค้าบางคนแก้เองด้วยการรันสคริปต์ค่ายอื่นก่อน ซึ่งได้ผลเพราะมันถ่วงเวลา
+	-- เราหน่วงเองตรงนี้ ไม่ต้องพึ่งสคริปต์คนอื่น
+	-- เครื่องช้ามากตั้งเพิ่มเป็น 25-30 ได้
+	StartupGrace = 15,
 
 	-- ยืนจุดกลางอย่างเดียว ไม่วาปเข้าแปลงเลย
 	--
@@ -1448,6 +1474,8 @@ local function patchAntiCheat()
 	pcall(Hub.blockLocalDeath)
 	-- ดันเกณฑ์สั่งแก้ไขเป็นอนันต์ (ดู Hub.liftThreshold)
 	-- ทำครั้งเดียวพอ ตัวมันเช็ค Hub.ThresholdLifted ให้แล้ว ไม่กวาดซ้ำ
+	-- ปิดระบบแก้ไขที่ตารางตั้งค่า  ตัวแรงสุด ทำก่อน (ดู Hub.killCorrections)
+	pcall(Hub.killCorrections)
 	pcall(Hub.liftThreshold)
 	acPatched = true
 	return true
@@ -1463,7 +1491,10 @@ LocalPlayer.CharacterAdded:Connect(function()
 	acPatched = false
 	if Hub.noclipRebuild then pcall(Hub.noclipRebuild) end   -- ตัวละครใหม่ ชิ้นส่วนชุดใหม่
 	-- ตัวละครใหม่ = โมดูลสร้างค่าชุดใหม่ ต้องดันเกณฑ์ใหม่
+	-- ตัวละครใหม่ = โมดูลสร้างตารางตั้งค่าใหม่ ต้องปิดใหม่ทั้งสองตัว
 	Hub.ThresholdLifted = false
+	Hub.CorrectionsKilled = false
+	Hub.KillScanAt = nil
 	Hub.patchTries = 0
 	pcall(Hub.blockLocalDeath)   -- Humanoid ตัวใหม่ ต้องปิดสถานะตายใหม่ทันที
 	-- ปะทันทีรอบหนึ่งก่อน ไม่งั้นช่วง 1 วินาทีแรกหลังเกิดใหม่ยังไม่มีการปะ
@@ -1487,7 +1518,36 @@ end)
 -- การปะใช้เวลาไม่ถึงมิลลิวินาทีถ้าปะไว้แล้ว (แค่เขียนทับค่าเดิม) จึงทำถี่ได้
 local lastPatchAt = 0
 
+-- ประตูหน่วงก่อนสแกนหน่วยความจำ  แก้อาการหลุด Error 279
+--
+-- 279 ไม่ใช่การโดนเตะเพราะโกง (นั่นคือ 267) แต่เป็น "Connection attempt failed"
+-- เกิดเมื่อไคลเอนต์ค้างนานเกินไปจนเซิร์ฟเวอร์ตัดสายทิ้ง
+--
+-- ตัวที่ทำให้ค้างคือ getgc(true) ซึ่งไล่ทุกอ็อบเจกต์ในหน่วยความจำ
+-- โค้ดนี้จดไว้เองตั้งแต่แรกว่า "เครื่องแรงใช้ 148ms เครื่องช้าหรือมือถือใช้เป็นวินาที"
+--
+-- ลูปเบื้องหลังเดินทุก 0.25 วินาที และเรียก warpReady ตั้งแต่วินาทีแรกที่โหลด
+-- ซึ่งเป็นช่วงที่การเชื่อมต่อยังไม่นิ่ง เครื่องช้าจึงโดนตัดสายตรงนั้น
+--
+-- ผู้ใช้สังเกตเองว่า "ต้องรันสคริปต์ค่ายอื่นขึ้นมาก่อน แล้วเราจะรันได้ปกติ"
+-- นั่นไม่ใช่เพราะสคริปต์นั้นมีอะไรพิเศษ แต่เพราะมันถ่วงเวลาให้เราเริ่มช้าลง
+-- พ้นช่วงเปราะบางไปแล้ว  เราหน่วงเองได้ ไม่ต้องพึ่งสคริปต์คนอื่น
+--
+-- เงื่อนไข: ต้องพ้นเวลาผ่อนผัน และตัวละครต้องเกิดแล้วมีเลือด
+local scanReadyAt = nil
+local function scanReady()
+	if scanReadyAt == nil then
+		scanReadyAt = os.clock() + math.max(0, tonumber(Config.StartupGrace) or 15)
+	end
+	if os.clock() < scanReadyAt then return false end
+	local c = LocalPlayer.Character
+	local hum = c and c:FindFirstChildOfClass("Humanoid")
+	return hum ~= nil and hum.Health > 0
+end
+Hub.scanReady = scanReady
+
 local function warpReady()
+	if not scanReady() then return false end
 	if not acPatched then
 		-- จำกัดความถี่แม้ตอนยังปะไม่ติด
 		--
@@ -1582,6 +1642,20 @@ Hub.pinAt = function(pos, dur)
 	end
 	Hub.PinPos = pos
 	Hub.PinUntil = os.clock() + dur
+end
+
+-- ปลดตัวตรึงทันที  ต้องเรียกทุกครั้งที่งานที่ต้องตรึงจบแล้ว
+--
+-- ตัวตรึงเขียนพิกัดที่ RenderPriority.Last+1 = ทับทุกอย่างที่สั่งหลังจากนั้น
+-- ถ้าไม่ปลด มันจะลากตัวละครกลับจุดเดิมจนกว่าจะครบเวลาที่ตั้งไว้
+--
+-- อาการที่เจอจริง: ตรึงไว้ที่ตำแหน่งไข่ 2 วินาทีก่อนยิงเก็บ
+-- พอเก็บได้แล้วสั่งวาปกลับ ตัวตรึงลากกลับมาที่ไข่ทันที
+-- ตัวละครยืนนิ่งอยู่ตรงนั้นจนการ์ดมาตีตาย
+-- และเกิดเฉพาะไข่ใบแรกหลังรีเซ็ต เพราะ fieldIsFresh() จริงแค่ช่วงนั้น
+Hub.pinRelease = function()
+	Hub.PinUntil = 0
+	Hub.PinPos = nil
 end
 
 -- เขียนพิกัดให้เป็นคนสุดท้ายของเฟรม
@@ -2062,6 +2136,9 @@ end
 --
 -- ต้องต่ออายุทุกเฟรม เพราะ Impact.EndRagdoll/Monitor ล้างทิ้งเมื่อหมดอายุ
 Hub.acState = function()
+	-- ห้ามสแกนหน่วยความจำในช่วงที่การเชื่อมต่อยังไม่นิ่ง (ดู scanReady ข้างบน)
+	-- ถ้ายังไม่ถึงเวลา คืนของที่หาไว้แล้วไปก่อน ไม่ต้องไปไล่ใหม่
+	if not Hub.ACState and not scanReady() then return nil end
 	-- ตารางสถานะเป็นของตัวละครตัวปัจจุบัน เกิดใหม่ = ตารางใหม่ ต้องหาใหม่
 	local c = LocalPlayer.Character
 	if Hub.ACStateFor == c and Hub.ACState then return Hub.ACState end
@@ -2111,6 +2188,81 @@ Hub.acState = function()
 	return found
 end
 
+-- ปิดระบบแก้ไขที่ตารางตั้งค่าโดยตรง  = ตัวที่แรงที่สุด
+--
+-- ทำไมเอากลับมา:
+--
+-- โค้ดรุ่นก่อนเกมอัปเดต (New Text Document.txt) มีตัวนี้อยู่ และรุ่นนั้นไม่โดนเตะ
+-- มันถูกถอดออกตอนไล่หาสาเหตุการเตะ แล้วผมเอากลับมาแค่ครึ่งเดียว
+-- (ดันเกณฑ์ 1.35 เป็นอนันต์ = Hub.liftThreshold ข้างล่าง) ซึ่งวัดแล้วไม่ช่วย
+-- แต่อีกครึ่งที่แรงกว่ามาก คือปิด CorrectionsEnabled ที่ตารางตั้งค่า ไม่เคยเอากลับมาเลย
+--
+-- และหลักฐานล่าสุดชี้ทางนี้:
+--   ลูกค้าบอก "รัน Speed Hub X ก่อนแล้วรันของเราได้ปกติ"
+--   สคริปต์นั้นโหลดตัวจริงของเกมนี้ขึ้นมา (มีในรายการ GameList: [10563114921])
+--   ถูกเข้ารหัสด้วย Luraph อ่านไม่ได้ แต่แทบแน่นอนว่ามันปิดระบบกันโกงให้
+--   นั่นคือเหตุผลที่ของเราไปรอดตามหลังมันได้
+--
+-- ต่างจากการดันเกณฑ์: ปิดที่นี่ตัดทั้งการฆ่าและการลากกลับพร้อมกัน
+-- เพราะเป็นสวิตช์ที่โมดูลอ่านก่อนจะลงมือทำอะไรเลย
+--
+-- ต้องมี getgc  ถ้าไม่มี setreadonly ก็ยังลองเขียนได้ (บางตารางไม่ได้ล็อก)
+-- ปิดได้ด้วย Config.KillCorrections = false
+local function findIntegrityConfig()
+	if type(getgc) ~= "function" then return nil end
+	local ok, found = pcall(function()
+		for _, v in pairs(getgc(true)) do
+			if type(v) == "table"
+			   and rawget(v, "SpeedCorrectionThreshold") ~= nil
+			   and rawget(v, "TickInterval") ~= nil
+			   and rawget(v, "CorrectionsEnabled") ~= nil then
+				return v
+			end
+		end
+	end)
+	return ok and found or nil
+end
+
+Hub.killCorrections = function()
+	if Config.KillCorrections == false then return false end
+	if Hub.CorrectionsKilled then return true end
+	-- ห้ามสแกนช่วงเชื่อมต่อยังไม่นิ่ง (ดู scanReady)
+	if not scanReady() then return false end
+	if os.clock() - (Hub.KillScanAt or -1e9) < 20 then return false end
+	Hub.KillScanAt = os.clock()
+
+	local cfg = findIntegrityConfig()
+	if not cfg then
+		Hub.KillMiss = (Hub.KillMiss or 0) + 1
+		-- เลิกลองหลังพลาด 3 ครั้ง
+		--
+		-- วัดจริงบนเกมเวอร์ชันปัจจุบัน: หาไม่เจอ (found_config_table = false)
+		-- ตารางที่มี CorrectionsEnabled อยู่ในเกมก่อนอัปเดต v358
+		-- หลังอัปเดตค่าพวกนี้ย้ายไปอยู่ใน Limits.luau และเก็บเป็น upvalue ของฟังก์ชัน
+		-- ไม่ใช่ตารางที่ getgc มองเห็น (ไล่ 45,592 ตารางไม่เจอเลย)
+		--
+		-- ถ้าไม่เลิกลอง มันจะไล่ getgc ซ้ำทุก 20 วินาทีตลอดกาลโดยไม่มีวันสำเร็จ
+		-- ซึ่งเป็นบั๊กแบบเดียวกับที่ทำให้ RAM ไหลใน liftThreshold
+		-- เก็บโค้ดไว้เผื่อเกมย้ายกลับ หรือเผื่อมีเซิร์ฟรุ่นเก่า
+		if Hub.KillMiss >= 3 then Hub.CorrectionsKilled = true end
+		return false
+	end
+
+	local ok = pcall(function()
+		if type(setreadonly) == "function" then pcall(setreadonly, cfg, false) end
+		cfg.CorrectionsEnabled = false
+		cfg.ShadowMode = true
+	end)
+
+	-- ต้องอ่านกลับมาเช็คว่าเขียนติดจริง ไม่ใช่เชื่อว่า pcall ผ่านแล้วจบ
+	local stuck = (rawget(cfg, "CorrectionsEnabled") == false)
+	if stuck then
+		Hub.CorrectionsKilled = true
+		log("ปิดระบบแก้ไขตำแหน่งของเกมแล้ว")
+	end
+	return ok and stuck
+end
+
 -- ดันเกณฑ์สั่งแก้ไขให้เป็นอนันต์  = ตัดการดึงกลับที่ต้นทาง
 --
 -- ทำไมถึงกลับมาใช้วิธีนี้:
@@ -2135,6 +2287,8 @@ end
 Hub.liftThreshold = function()
 	if Config.LiftThreshold == false then return false end
 	if Hub.ThresholdLifted then return true end
+	-- ห้ามสแกนช่วงเชื่อมต่อยังไม่นิ่ง ไม่งั้นค้างจนโดนตัดสาย Error 279
+	if not scanReady() then return false end
 	-- กันสแกนถี่ ต่อให้ธงโดนรีเซ็ตด้วยเหตุอื่น ห้ามไล่ getgc บ่อยกว่า 20 วินาทีต่อครั้ง
 	-- getgc(true) สร้างตาราง 45,000 ช่องทุกครั้งที่เรียก แพงมาก
 	if os.clock() - (Hub.LiftScanAt or -1e9) < 20 then return false end
@@ -3701,6 +3855,22 @@ local PLACE_ROT    = CFrame.fromMatrix(Vector3.zero, Vector3.new(0, 0, -1), Vect
 
 local lastPlaceIndex = 1   -- จุดที่วางสำเร็จล่าสุด เริ่มไล่จากตรงนี้รอบหน้า
 
+-- จำช่องที่เซิร์ฟปฏิเสธไว้ "ข้ามรอบ" ไม่ใช่แค่ในรอบเดียว
+--
+-- ทำไมสำคัญ: เกมมี ReplicatedStorage/Library/Modules/RateLimiter.luau
+-- เป็น token bucket ที่สั่งแบนได้ (DefaultBanLength = 60 วินาที)
+--     if p9.causesBan then p7:ApplyBan(p8) end
+--     Message.STANDARD_ERROR = "You're doing that too fast!"
+-- ตัวตั้งค่าว่า endpoint ไหนแบนอยู่ฝั่งเซิร์ฟ เราอ่านไม่ได้
+--
+-- แต่โค้ดนี้จดไว้เองว่าการวางไข่ยิงเซิร์ฟ ~35 ครั้งต่อไข่ใบเดียว
+-- และตอนทดสอบวางจากจุดกลางวัดได้ 1,932 ครั้งใน 50 วินาที
+-- ไม่มีคนเล่นจริงยิงแบบนั้น ต่อให้ไม่ใช่ต้นเหตุการโดนเตะก็ควรลดอยู่แล้ว
+--
+-- ของเดิมสร้างตาราง taken ใหม่ทุกรอบ ช่องที่เพิ่งรู้ว่าไม่ว่างจึงถูกลืมทันที
+-- แล้วไปยิงถามซ้ำรอบหน้า วนอยู่แบบนี้ทุกรอบ
+local slotDead = {}
+
 local PLACE_OFFSETS = (function()
 	local list = {}
 	for ring = 0, 5 do
@@ -3888,6 +4058,13 @@ local function placePendingEggs()
 		end
 	end
 
+	-- เอาช่องที่เคยรู้ว่าไม่ว่างมาใส่ด้วย ไม่ต้องไปยิงถามเซิร์ฟซ้ำ
+	-- (slotDead ถูกล้างตอนฟักไข่สำเร็จ เพราะตอนนั้นช่องจะว่างขึ้นจริง)
+	for k in pairs(slotDead) do taken[k] = true end
+	if type(Hub.OutsidePlace) == "table" then
+		for k in pairs(Hub.OutsidePlace) do taken[k] = true end
+	end
+
 	-- เริ่มไล่จากจุดที่วางสำเร็จล่าสุด
 	--
 	-- รังเติมทีละช่องเรียงกันไป จุดที่ว่างรอบหน้าจึงอยู่ติดกับจุดที่เพิ่งวางได้
@@ -3925,6 +4102,9 @@ local function placePendingEggs()
 			if Hub.OutsidePlace and Hub.OutsidePlace[key] then continue end
 
 			local cf = CFrame.new(PLACE_ORIGIN + off) * PLACE_ROT
+			-- นับจำนวนครั้งที่ยิงเซิร์ฟ  เกมมีตัวจำกัดอัตราที่สั่งแบนได้
+			-- (ReplicatedStorage/Library/Modules/RateLimiter.luau) ต้องเห็นตัวเลขนี้
+			Hub.PlaceCalls = (Hub.PlaceCalls or 0) + 1
 			local ok, msg = placeF:InvokeServer({ Uid = uid, LocalCFrame = cf })
 			if ok == true then
 				placed += 1
@@ -3934,6 +4114,7 @@ local function placePendingEggs()
 			end
 			if tostring(msg):find("too close") then
 				taken[key] = true
+				slotDead[key] = true   -- จำข้ามรอบ ลดการยิงเซิร์ฟซ้ำ
 			elseif not tostring(msg):find("Get closer") and not tostring(msg):find("too many") then
 				-- ปฏิเสธด้วยเหตุอื่น = จุดนี้ใช้ไม่ได้กับขนาดแปลงตอนนี้ จำไว้
 				Hub.OutsidePlace = Hub.OutsidePlace or {}
@@ -4033,6 +4214,10 @@ local function hatchReadyEggs(limit, force)
 	end
 
 	if hatched > 0 then
+		-- ฟักแล้วช่องรังว่างขึ้นจริง ลืมช่องที่เคยจำว่าไม่ว่างได้แล้ว
+		-- ถ้าไม่ล้าง มันจะจำผิดว่าเต็มตลอดกาลแล้ววางไข่ใหม่ไม่ได้อีก
+		table.clear(slotDead)
+		if type(Hub.OutsidePlace) == "table" then table.clear(Hub.OutsidePlace) end
 		Stats.hatched += hatched
 		-- ฟักแล้วได้สัตว์ตัวใหม่ ต้องล้างแคชทันที
 		-- ไม่งั้น autoSellWeak() ที่ทำต่อจะไม่เห็นตัวใหม่ แล้วตัดสินใจจากรายการเก่า
@@ -4913,6 +5098,16 @@ local function warpCycle()
 				got = got + 1
 				Stats.stolen += 1
 				dropFromSnap(nextEgg.Uid)   -- ใบนี้หายจากสนามแล้ว
+
+				-- ปลดตัวตรึงก่อนออกเดินทาง ห้ามลืมเด็ดขาด
+				--
+				-- ก่อนยิงเก็บ เราตรึงตัวไว้ที่ตำแหน่งไข่ 2 วินาที (ดู Hub.pinAt ข้างบน)
+				-- ถ้าไม่ปลด มันจะลากเรากลับมาที่ไข่ทุกเฟรมจนครบเวลา
+				-- ผลคือเก็บไข่ได้แล้วยืนเอ๋ออยู่ตรงนั้นจนการ์ดมาตีตาย
+				-- แล้วไข่ใบนั้นก็หลุดมือไป (ผู้ใช้รายงานว่าเป็นทุกรอบหลังรีเซ็ต
+				-- ซึ่งตรงกัน เพราะ fieldIsFresh() เป็นจริงแค่ช่วงนั้น)
+				pcall(Hub.pinRelease)
+
 				-- กลับเซฟโซนฝากทันที ช่องถือว่างเร็วกว่ายืนรอ 5 เท่า
 				Hub.Phase = "วาปกลับ SAFE ZONE ฝากไข่"
 				local okBack = depositCarried(warpHome)
@@ -4922,6 +5117,7 @@ local function warpCycle()
 					continue
 				end
 			elseif tostring(msg):find("carrying") then
+				pcall(Hub.pinRelease)   -- ต้องออกจากตำแหน่งไข่ ปลดตัวตรึงก่อน
 				Hub.Phase = "วาปกลับ SAFE ZONE ฝากไข่"
 				if not depositCarried(warpHome) then break end
 			elseif tostring(msg):find("gameplay area") then
@@ -4940,6 +5136,7 @@ local function warpCycle()
 				-- ระหว่างกล่องขาวขึ้น เซิร์ฟไม่ให้เก็บ ยิงกี่ครั้งก็ไม่ติด อยู่ตรงนั้นมีแต่เสีย
 				-- ถอยกลับมายืนนิ่ง แล้วรอบถัดไปตัวรอ (Config.PreResetHold)
 				-- จะยืนรอจนไข่สลับชุดจริงค่อยออกไป ตอนนั้นเก็บติดแน่และได้ใบแพงสุดก่อนใคร
+				pcall(Hub.pinRelease)   -- จะกลับจุดกลาง ปลดตัวตรึงที่ไข่ก่อน
 				Hub.Phase = "ยังรีเซ็ตไม่จบ - กลับไปรอที่จุดกลาง"
 				move(warpHome)
 				Hub.BoxAborts = (Hub.BoxAborts or 0) + 1
@@ -6266,31 +6463,64 @@ if Config.Trace ~= false and type(writefile) == "function" then
 				:format(tostring(Hub.Build), tostring(Hub.Caps and Hub.Caps.executor),
 					game.PlaceVersion, string.sub(tostring(game.JobId), 1, 8)))
 		end)
+		-- บันทึกสถานะของระบบกันโกงด้วย  นี่คือข้อมูลที่ต้องใช้จริงตอนไล่หาสาเหตุการเตะ
+		--
+		-- ของเดิมบันทึกแต่ตำแหน่ง/เลือด/ความเร็ว ซึ่งบอกไม่ได้เลยว่าระบบมองเรายังไง
+		-- ตัวที่ต้องเห็นคือ ThreatLevel · Evidence.Speed · Evidence.Teleport
+		-- · LastViolationReason · MovementMode · IsSupportedNow
+		-- ถ้าโดนเตะแล้วค่าพวกนี้ยังสะอาด แปลว่าเซิร์ฟตัดสินเอง ไม่ใช่ฝั่งเรา
+		--
+		-- และเก็บ "ความเร็วเชิงตำแหน่งจริง" ด้วย เพราะนั่นคือสิ่งที่เซิร์ฟวัด
+		-- ต่างจาก AssemblyLinearVelocity ที่เป็นค่าที่เราประกาศเอง
+		local lastP, lastT
 		while alive() do
 			local ok = pcall(function()
 				local c = LocalPlayer.Character
 				local hum = c and c:FindFirstChildOfClass("Humanoid")
 				local hrp = c and c:FindFirstChild("HumanoidRootPart")
 				local S = Hub.Stats or {}
-				buf[#buf + 1] = ("%.0f %s|xz %d,%d|hp %s|md %.1f|v %.0f|col %s|dead %s|got %s|f %s|boost %s|%s")
+				local st = Hub.ACState
+
+				-- ความเร็วเชิงตำแหน่งจริงระหว่างสองบรรทัด
+				local realSpd = -1
+				local now = os.clock()
+				if hrp and lastP and lastT and now > lastT then
+					realSpd = (hrp.Position - lastP).Magnitude / (now - lastT)
+				end
+				if hrp then lastP, lastT = hrp.Position, now end
+
+				local ev = st and rawget(st, "Evidence")
+				buf[#buf + 1] = ("%.0f %s|xz %d,%d|hp %s|ws %.1f|vDecl %.0f|vReal %.0f"
+					.. "|threat %s|evS %s|evT %s|vr %s|mode %s|sup %s|lock %s"
+					.. "|imp %s|col %s|dead %s|got %s|f %s|%s")
 					:format(
-						os.clock() - t0,
+						now - t0,
 						tostring(Hub.Phase),
 						hrp and hrp.Position.X or 0, hrp and hrp.Position.Z or 0,
 						hum and math.floor(hum.Health) or -1,
-						hum and hum.MoveDirection.Magnitude or -1,
+						hum and hum.WalkSpeed or -1,
 						hrp and hrp.AssemblyLinearVelocity.Magnitude or -1,
+						realSpd,
+						st and tostring(rawget(st, "ThreatLevel")) or "?",
+						ev and tostring(rawget(ev, "Speed")) or "?",
+						ev and tostring(rawget(ev, "Teleport")) or "?",
+						st and tostring(rawget(st, "LastViolationReason")) or "?",
+						st and tostring(rawget(st, "MovementMode")) or "?",
+						st and tostring(rawget(st, "IsSupportedNow")) or "?",
+						st and tostring(rawget(st, "ValidationLocked")) or "?",
+						st and tostring(rawget(st, "ImpulseContext") ~= nil) or "?",
 						hrp and tostring(hrp.CanCollide) or "?",
 						hum and tostring(hum:GetStateEnabled(Enum.HumanoidStateType.Dead)) or "?",
 						tostring(S.stolen), tostring(S.failed),
-						tostring(Hub.ACState ~= nil),
-						tostring(Hub.LastCarryMsg))
+						-- จำนวนครั้งที่ยิง placeF สะสม  ใช้ดูว่ายิงถี่เกินจนโดนตัวจำกัดอัตราไหม
+						"place " .. tostring(Hub.PlaceCalls or 0) .. "|" .. tostring(Hub.LastCarryMsg))
 				if #buf > MAX then table.remove(buf, 1) end
 				-- เขียนทับทั้งไฟล์ทุกครั้ง ไฟล์จึงไม่โตไม่จำกัด
 				writefile(TRACE, table.concat(buf, "\n"))
 			end)
 			if not ok then break end
-			task.wait(2)
+			-- 1 วินาที ไม่ใช่ 2  ยิ่งถี่ยิ่งได้ภาพใกล้วินาทีที่โดนเตะ
+			task.wait(1)
 		end
 	end)
 end
@@ -6308,17 +6538,51 @@ pcall(function()
 	end
 end)
 
--- เปิดของที่ควรเปิดตั้งแต่โหลด
-if Config.SmoothCam then task.spawn(startSmoothCam) end
-if Config.PerfMode then task.spawn(applyPerfSettings) end
-if Config.FpsBoost then
-	task.spawn(function()
-		task.wait(2)   -- รอฉากโหลดครบก่อน ไม่งั้นตัดไม่หมด
-		local n = Hub.fpsBoost()
-		log(("เร่งเฟรม: ตัดของออก %d ชิ้น"):format(n))
-	end)
+-- เปิดของที่ควรเปิดตั้งแต่โหลด  แต่ต้องรอให้การเชื่อมต่อนิ่งก่อน
+--
+-- ทำไมต้องรอ: ลูกค้าหลายคนรายงานว่า "แค่รันก็โดนเตะ" และ
+-- "ถ้าเอาสคริปต์ค่ายอื่นมารันก่อน กลับรันได้ปกติ"
+--
+-- ผมไปอ่านสคริปต์นั้นแล้ว (Speed Hub X) ทั้งไฟล์มี 12 บรรทัด:
+--     local Games = loadstring(HttpGet(game, ".../GameList.lua"))()
+--     local URL = Games[GameId]
+--     if not URL then return end        <- เกมไม่อยู่ในรายการ = ไม่ทำอะไรเลย
+-- มันไม่แตะ WalkSpeed / Humanoid / CFrame / รีโมท อะไรเลยแม้แต่ตัวเดียว
+--
+-- สิ่งเดียวที่มันให้คือ "การถ่วงเวลา" (ดึง HTTP สองรอบก่อนเราจะเริ่ม)
+-- = ยืนยันว่าปัญหาเป็นเรื่องจังหวะเวลา ไม่ใช่การเปลี่ยนสถานะอะไรในเกม
+--
+-- ตัวหนักสุดคือ fpsBoost ซึ่งวน workspace:GetDescendants() ของทั้งฉาก
+-- (คอมเมนต์ในตัวมันเขียนเองว่า "ฉากนี้มีของเป็นหมื่นชิ้น")
+-- แล้วเขียน property ใส่ทุกชิ้น  ของเดิมรันที่ 2 วินาทีหลังโหลด
+-- ซึ่งอยู่กลางช่วงที่การเชื่อมต่อยังไม่นิ่งพอดี
+local function waitSettled(extra)
+	-- รอตัวละครเกิดและมีเลือดก่อน  ไม่ใช่แค่ game:IsLoaded()
+	local t0 = os.clock()
+	while os.clock() - t0 < 30 do
+		local c = LocalPlayer.Character
+		local hum = c and c:FindFirstChildOfClass("Humanoid")
+		if hum and hum.Health > 0 then break end
+		task.wait(0.25)
+	end
+	task.wait(math.max(0, tonumber(extra) or 0))
 end
-if Config.BlankScreen then task.spawn(function() Hub.setBlankScreen(true) end) end
+
+task.spawn(function()
+	waitSettled(tonumber(Config.StartupGrace) or 15)
+
+	if Config.SmoothCam then pcall(startSmoothCam) end
+	if Config.PerfMode then pcall(applyPerfSettings) end
+
+	if Config.FpsBoost then
+		-- ทำหลังสุด เพราะหนักที่สุด  และหน่วงเพิ่มอีกชั้น
+		task.wait(3)
+		local ok, n = pcall(Hub.fpsBoost)
+		if ok then log(("เร่งเฟรม: ตัดของออก %d ชิ้น"):format(n or 0)) end
+	end
+
+	if Config.BlankScreen then pcall(Hub.setBlankScreen, true) end
+end)
 
 -- เริ่มฟาร์มเองถ้าสั่งไว้
 -- หน่วงนิดนึงให้ UI/ตัวละคร/ข้อมูลเกมพร้อมก่อน ไม่งั้นรอบแรกพลาดฟรี
