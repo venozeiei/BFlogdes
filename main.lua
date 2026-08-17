@@ -175,7 +175,7 @@ local Config = {
 
 	-- ถึงที่หมายแล้วปล่อยโหมดยกเว้นหมดอายุ เพื่อให้เกมตั้งจุดตั้งต้นใหม่ให้ (ดู Hub.expireImpulse)
 	-- นี่คือกลไกของเกมเอง ไม่ใช่การหลอก  ปิดได้ถ้าอยากเทียบผล
-	ExpireOnArrive = true,
+	ExpireOnArrive = false,
 
 	-- รับรองตำแหน่งตัวเองเป็นจุดตั้งต้นทุกเฟรมตอนเดินทาง (ดู Hub.adoptBaseline)
 	--
@@ -188,8 +188,13 @@ local Config = {
 	TreadmillWatch = true,
 
 	-- กดกระโดดให้เองเมื่อค้างไปต่อไม่ได้เกิน 4 วินาที (ดู Hub.unstickStalled)
-	-- ทำแทนการกด space bar เอง โดยไม่ต้องรู้ว่าติดสถานะอะไร
-	StallWatch = true,
+	--
+	-- ปิดไว้เป็นค่าเริ่มต้น  มันตีกับการฝากไข่
+	-- ตอนฝากไข่ phase คือ "วาปกลับ SAFE ZONE ฝากไข่" ซึ่งเข้าเงื่อนไข "กำลังเดินทาง"
+	-- แต่ตัวละครต้องยืนนิ่งรอเซิร์ฟรับไข่ ตัวเฝ้าเลยเห็นเป็น "ค้าง" แล้วสั่งกระโดด
+	-- ส่วน depositCarried ก็ตรึงตำแหน่งกลับทุก 0.08 วินาที = ตีกันไปมา ตัวสั่นไม่นิ่ง
+	-- (ผู้ใช้รายงาน: "ตอนนี้มัน bring ไปมาอย่างเดียวเลย ไม่นิ่งเหมือนโค้ดก่อน")
+	StallWatch = false,
 
 	-- ยืนจุดกลางอย่างเดียว ไม่วาปเข้าแปลงเลย
 	--
@@ -319,7 +324,7 @@ local Config = {
 	-- ออกไปตอนนั้นมีแต่เสีย: เก็บไม่ได้ · โดนการ์ดตี · แล้วคิวไข่โดนไล่ข้ามทิ้ง
 	-- ยืนรอเฉยๆ แล้วออกตอนกล่องเปิด ได้ของครบกว่าและไม่ตาย
 	-- 0 = ปิด (กลับไปใช้ท่าเดิมคือวาปไปยืนทับไข่รอ ซึ่งวัดแล้วเก็บไม่ติด)
-	PreResetHold = 10,
+	PreResetHold = 20,
 
 	-- ยืนรอไข่รีเซ็ตได้นานสุดกี่วินาที  ครบแล้วยังไม่มาก็ออกไปลองเก็บเลย
 	-- กันกรณีตัวตรวจ fieldIsFresh พลาด จะได้ไม่ยืนแช่ตลอดกาล
@@ -1835,6 +1840,23 @@ task.spawn(function()
 		task.wait(1)
 		if genv.EGG_FARM_GEN ~= GEN then break end   -- รุ่นใหม่มาแล้ว เลิกเฝ้า
 		if Config.Running then
+			-- ตกใต้แมพ: ลากกลับจุดกลางทันที
+			--
+			-- พื้นสนามอยู่ราว y=68-77  ถ้าต่ำกว่านั้นมากแปลว่าหลุดออกนอกโลกแล้ว
+			-- ปล่อยไว้จะร่วงจนตาย เสียไข่ที่ถืออยู่ทั้งหมด
+			-- (เคยเกิดสองทาง: เรย์หาพื้นเจอของผิดแล้วลากดิ่ง · กระโดดตรงขอบแล้วตก)
+			pcall(function()
+				local c = LocalPlayer.Character
+				local hrp = c and c:FindFirstChild("HumanoidRootPart")
+				if hrp and hrp.Position.Y < (LANE_Y - 80) then
+					Hub.Phase = "หลุดใต้แมพ - ดึงกลับจุดกลาง"
+					hrp.CFrame = CFrame.new(Hub.HOME.X, Hub.HOME.Y, Hub.HOME.Z)
+					hrp.AssemblyLinearVelocity = Vector3.zero
+					Hub.FellOff = (Hub.FellOff or 0) + 1
+					log("หลุดใต้แมพ - ดึงกลับจุดกลางแล้ว")
+				end
+			end)
+
 			-- ลูกวิ่งค้าง: ตรวจจาก WalkSpeed ที่ไต่ขึ้นไม่หยุด แล้วกระโดดปลด
 			if Config.TreadmillWatch ~= false then
 				if Hub.treadmillStuck() then pcall(Hub.clearTreadmillState) end
@@ -2377,7 +2399,16 @@ Hub.glide = function(hrp, hum, dest)
 
 		local d = dest - hrp.Position
 		local m = d.Magnitude
-		if m <= reach then
+
+		-- วัดว่า "ถึงแล้วหรือยัง" ด้วยระยะแนวราบเท่านั้น ห้ามใช้ระยะ 3 มิติ
+		--
+		-- เราตั้งใจกดตัวลงติดพื้นทุกเฟรม (ดูตัวเกาะพื้นข้างล่าง)
+		-- แต่เป้าหมายไข่ถูกตั้งไว้สูงกว่าพื้น เช่น BottomCFrame + Vector3.new(0, 3, 0)
+		-- ระยะ 3 มิติจึงติดค่าแกน Y ค้างอยู่ตลอด ไม่มีวันต่ำกว่า reach (6)
+		-- ผลคือวิ่งวนอยู่ข้างเป้าหมายจนหมดเวลา แล้วนับเป็น GlideTimeout
+		-- (วัดสด: ขยับ 239/240 เฟรม ความเร็วสูงสุด 1,305 แต่ไปไม่ถึงสักที)
+		local flat = Vector3.new(d.X, 0, d.Z).Magnitude
+		if flat <= reach then
 			-- หยุดเดินให้เรียบร้อยตอนถึงที่หมาย
 			--
 			-- ต้องล้างความเร็วด้วย ไม่ใช่ล้างแค่ MoveDirection
@@ -2422,32 +2453,19 @@ Hub.glide = function(hrp, hum, dest)
 		local stepDist = math.min(capPerFrame, m)
 		local nextPos = hrp.Position + dir * stepDist
 
-		-- เกาะพื้นทุกเฟรม ห้ามลอย
+		-- เขียนตำแหน่งอย่างเดียว เหมือนตัวที่วัดได้ดีที่สุด
 		--
-		-- เคยถอดออกเพราะวัดแล้ว "เก็บไข่ 0 ฟอง" แต่ภายหลังพบว่าตัววัดของผมเองพัง
-		-- (มันเก็บ Hub ตัวเก่าไว้ พอโหลดสคริปต์ใหม่เลยนับไข่จากตัวที่หยุดนับไปแล้ว)
-		-- ผลนั้นจึงใช้ไม่ได้ ใส่กลับตามหลักฐานจากโค้ดเกม
+		-- ห้ามใส่ตัวเกาะพื้นตรงนี้ และห้ามเขียนมุมหันหน้าไปด้วย
 		--
-		-- Runtime.luau:537-548 บอกชัดว่าสถานะที่ระบบยอมรับต้องติดพื้น:
-		--   if not sample.IsSupported then
-		--       state.MovementMode = "Initializing"      <- ไม่รับเป็นจุดตั้งต้น
-		--       state.UnsupportedStartedAt = ...          <- เริ่มจับเวลาลอย
-		--       return
-		--   end
-		--   state.MovementMode = "Grounded"               <- ติดพื้นเท่านั้น
+		-- เคยใส่ทั้งสองอย่างแล้ววัดได้แย่ลงชัดเจน:
+		--   เกาะพื้นทุกเฟรม -> groundYAt ยิงเรย์ลง 250 studs พอวิ่งผ่านช่องว่างระหว่างโซน
+		--                      เรย์เจอพื้นที่อยู่ลึกมากแล้วลากเราดิ่งตาม = หลุดใต้แมพ
+		--                      และทำให้ระยะ 3 มิติถึงเป้าไม่มีวันต่ำกว่า 6 = วิ่งวนจนหมดเวลา
+		--   เขียนมุมด้วย    -> ตัวหันตามทิศทุกเฟรม ไม่ได้ช่วยอะไรที่วัดออกมาได้
 		--
-		-- และโน้ตที่วัดไว้เอง: ลอยนิ่งที่ +15 ตายวินาทีที่ 4.2 · ลอยตอนวิ่งตายทันที
-		if Config.GroundSnap ~= false then
-			local okg, snapped = pcall(snapToGround, nextPos)
-			if okg and typeof(snapped) == "Vector3" then nextPos = snapped end
-		end
-
-		-- ตัวต้องนิ่ง ห้ามหมุนห้ามสั่นระหว่างเดินทาง
-		--
-		-- เขียนทั้งตำแหน่งและมุมพร้อมกัน ถ้าเขียนแต่ตำแหน่ง ตัวจะโดนฟิสิกส์หมุนเล่น
-		-- ซึ่งทำให้ตัวอย่างที่เกมเก็บมีค่า AngularVelocity แกว่ง = ดูไม่เหมือนคนยืนวิ่งปกติ
-		hrp.CFrame = CFrame.new(nextPos, nextPos + Vector3.new(dir.X, 0, dir.Z))
-		hrp.AssemblyAngularVelocity = Vector3.zero
+		-- ตัวที่วัดได้ ดึงกลับ 0 · ตาย 0 · 15-16 ฟอง/50 วินาที เขียนแค่บรรทัดเดียวนี้
+		-- ส่วนเรื่องลอยแล้วตาย แก้ที่ปลายทางแทน (moveWarp กดเป้าหมายลงพื้นก่อนวาปอยู่แล้ว)
+		hrp.CFrame = CFrame.new(nextPos)
 
 		-- ประกาศความเร็วให้ตรงกับที่เคลื่อนที่จริงเป๊ะๆ ห้ามหนีบ ห้ามล้างเป็นศูนย์
 		--
@@ -3229,6 +3247,42 @@ function secondsToReset()
 	return total > 0 and total or nil
 end
 
+-- เหลืออีกกี่วินาทีจะเป็นกลางคืน  อ่านจากตัวนับถอยหลังตัวสั้น
+--
+-- ในเกมมีตัวนับสามตัว คนละที่คนละรูปแบบ:
+--   GameResetTimer/TimeLeft/Main/TextLabel     "in 3m 16s"  รอบใหญ่ 5 นาที (secondsToReset ใช้ตัวนี้)
+--   GameResetTimer/EndingSoon/Main/TextLabel   "in 17s"     นับถอยหลังก่อนเปลี่ยนเป็นกลางคืน
+--   ResetStartTimer/Frame/NightTimer           "17s"        ตัวเดียวกันคนละที่
+--
+-- ตัวที่ผู้ใช้ชี้คือตัวสั้น ซึ่งโผล่เฉพาะช่วงท้ายก่อนกลางคืน
+-- ต้องอ่านตัวนี้ตรงๆ จะได้รู้แน่ว่าเหลืออีกกี่วินาที ไม่ใช่เดาจากรอบใหญ่
+function Hub.nightIn()
+	-- ตัวนับหลักที่ผู้ใช้เห็นมุมขวาล่างคือ TimeLeft  ("in 3m 32s" / "in 17s")
+	-- เชื่อตัวนี้ก่อนเสมอ
+	--
+	-- ห้ามเชื่อ EndingSoon เป็นอันดับแรก
+	-- วัดสดแล้วเจอว่ามัน "ค้างข้อความเก่าไว้และยัง Visible" หลังรีเซ็ตจบ
+	-- (TimeLeft บอก 3m 32s แต่ EndingSoon ยังโชว์ "in 10s")
+	-- ผลคือสคริปต์ยืนรอแช่ตั้งแต่เพิ่งรีเซ็ตเสร็จ ไม่ออกไปเก็บเลยทั้งรอบ
+	local main = secondsToReset()
+	if main then return main end
+
+	for _, name in ipairs({ "EndingSoon", "NightTimer" }) do
+		local g = findGui(name)
+		if g then
+			local lbl = g:IsA("TextLabel") and g or g:FindFirstChildWhichIsA("TextLabel", true)
+			if lbl and lbl.Visible then
+				local t = tostring(lbl.Text)
+				local m = tonumber(t:match("(%d+)%s*m")) or 0
+				local s = tonumber(t:match("(%d+)%s*s")) or 0
+				local total = m * 60 + s
+				if total > 0 then return total end
+			end
+		end
+	end
+	return nil
+end
+
 -- ตรวจรีเซ็ตเบื้องหลัง ไม่ใช่ตอนต้นรอบอย่างเดียว
 --
 -- noteFieldReset() เดิมถูกเรียกที่ต้นรอบเก็บไข่เท่านั้น
@@ -3794,8 +3848,19 @@ local function placePendingEggs()
 	-- ไข่ที่เซิร์ฟรับเข้ากระเป๋าช้ากว่านั้นจะไม่อยู่ในรายการเลย = ไม่ถูกวาง
 	-- ผู้ใช้เจอตรงๆ: "เข้าไปวางจริง แต่วางไม่ครบ"
 	-- อ่านใหม่ทุกรอบจนกว่าจะไม่มีไข่เหลือ หรือวางเพิ่มไม่ได้แล้ว
+	-- ล้างความจำจุดที่วางไม่ได้ทุก 2 นาที
+	--
+	-- จุดนอกแปลงจะอยู่นอกไปเรื่อยๆ จนกว่าจะอัปฐาน ซึ่งนานๆ ครั้ง
+	-- ล้างตามเวลาง่ายกว่าเช็คขนาดแปลง และไม่ต้องพึ่ง equipCap()
+	-- ซึ่งประกาศทีหลังฟังก์ชันนี้ (เรียกจากตรงนี้จะได้ nil)
+	if os.clock() - (Hub.OutsideAt or -1e9) > 120 then
+		Hub.OutsidePlace = {}
+		Hub.OutsideAt = os.clock()
+	end
+
+	-- 2 รอบพอ  เคยตั้ง 5 แล้ววัดได้ว่าวางไข่ 2 ฟองกินเวลา 29.98 วินาที
 	local placedTotal = 0
-	for round = 1, 5 do
+	for round = 1, 2 do
 	local pending = {}
 	for uid, rec in pairs(ownedEggs()) do
 		if rec.Placement == nil then
@@ -3848,6 +3913,17 @@ local function placePendingEggs()
 			local key = ("%d:%d"):format(math.floor(px / 4 + 0.5), math.floor(pz / 4 + 0.5))
 			if taken[key] then continue end
 
+			-- ข้ามช่องที่เคยวางไม่ได้เพราะอยู่นอกแปลง
+			--
+			-- ตาราง PLACE_OFFSETS มี 121 จุด ครอบคลุมแปลงที่อัปเต็มแล้ว
+			-- ฐานที่ยังเล็ก (Lv0 มี 7 ช่อง) จุดส่วนใหญ่จึงอยู่นอกแปลง เซิร์ฟปฏิเสธหมด
+			-- ยิงถามครั้งละ ~93ms คูณ 121 จุด = รอเกือบ 11 วินาทีต่อไข่หนึ่งฟอง
+			-- วัดจริงก่อนแก้: วางไข่ 2 ฟอง ใช้เวลา 29.98 วินาที
+			--
+			-- จุดที่อยู่นอกแปลงจะอยู่นอกไปตลอดจนกว่าจะอัปฐาน จำไว้แล้วข้ามเลย
+			-- ล้างความจำทุก 2 นาที เผื่ออัปฐานแล้วช่องเพิ่ม (ดูต้นฟังก์ชัน)
+			if Hub.OutsidePlace and Hub.OutsidePlace[key] then continue end
+
 			local cf = CFrame.new(PLACE_ORIGIN + off) * PLACE_ROT
 			local ok, msg = placeF:InvokeServer({ Uid = uid, LocalCFrame = cf })
 			if ok == true then
@@ -3856,7 +3932,13 @@ local function placePendingEggs()
 				lastPlaceIndex = ((lastPlaceIndex + oi - 2) % #PLACE_OFFSETS) + 1
 				break
 			end
-			if tostring(msg):find("too close") then taken[key] = true end
+			if tostring(msg):find("too close") then
+				taken[key] = true
+			elseif not tostring(msg):find("Get closer") and not tostring(msg):find("too many") then
+				-- ปฏิเสธด้วยเหตุอื่น = จุดนี้ใช้ไม่ได้กับขนาดแปลงตอนนี้ จำไว้
+				Hub.OutsidePlace = Hub.OutsidePlace or {}
+				Hub.OutsidePlace[key] = true
+			end
 
 			-- แยกสาเหตุที่วางไม่ได้ให้ออก
 			--
@@ -4447,7 +4529,10 @@ local function warpCycle()
 	-- ยืนรอเฉยๆ ปลอดภัยกว่าและได้ของครบกว่า ไม่มีการ์ดมาตีระหว่างรอด้วย
 	local holdSecs = tonumber(Config.PreResetHold) or 10
 	if holdSecs > 0 and Config.MoveMode == "warp" then
-		local left = secondsToReset()
+		-- ใช้ตัวนับสั้นเป็นหลัก (Hub.nightIn) เพราะมันคือตัวที่ผู้ใช้เห็นในจอ
+		-- ตัวยาว (secondsToReset) ใช้เป็นตัวสำรอง เผื่อตัวสั้นยังไม่โผล่
+		local nleft = Hub.nightIn()
+		local left = nleft or secondsToReset()
 		if (left ~= nil and left <= holdSecs) or Hub.BoxUp or isResetting() then
 			Hub.Phase = "ใกล้รีเซ็ต - ยืนรอที่จุดกลาง"
 			move(warpHome)
@@ -4691,6 +4776,21 @@ local function warpCycle()
 		local qi = 0
 		while got < chainGrab and tried < chainGrab * 2 do
 			if not Config.Running or not alive() then break end
+
+			-- กล่องขึ้นกลางคัน = เลิกทันที ไม่ต้องรอให้เก็บพลาดก่อน
+			--
+			-- ผู้ใช้สั่งไว้ตรงๆ: พอ "in Xs" เหลือน้อย ให้มายืนรอนิ่งๆ ห้ามวาปไปเก็บ
+			-- ไม่งั้นกล่องจะขึ้นตอนเราอยู่กลางสนามแล้วบัค
+			-- ตัวนับสั้น (Hub.nightIn) โผล่เฉพาะช่วงท้ายก่อนกลางคืน อ่านตรงจาก GUI
+			local nleft = Hub.nightIn()
+			if Hub.BoxUp or isResetting()
+			   or (nleft ~= nil and nleft <= (tonumber(Config.PreResetHold) or 10)) then
+				Hub.Phase = "ใกล้กลางคืน - เลิกเก็บ กลับไปรอที่จุดกลาง"
+				move(warpHome)
+				Hub.BoxAborts = (Hub.BoxAborts or 0) + 1
+				break
+			end
+
 			tried = tried + 1
 
 			qi = qi + 1
