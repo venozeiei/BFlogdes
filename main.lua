@@ -92,11 +92,23 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "diag-320"
+Hub.Build = "pricefirst-320"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
-Hub.HOME = { X = 513.43, Y = 68.58, Z = -364.74 }
+--
+-- ต้องตรงกับจุดยืนประจำ (IDLE_X, LANE_Y, Hub.pickLaneZ()) เป๊ะๆ
+--
+-- ของเดิม Y = 68.58 ซึ่งไม่ตรงกับ LANE_Y = 70.6
+-- ผลคือตัวละครโดนเขียนสลับสองค่าไปมาแล้วเด้งขึ้นลงตลอดเวลา
+-- วัดสดตอนยืนรอ: Y แกว่ง 1.97 studs ระหว่าง 68.58 กับ 70.55 = สองเลขนี้เป๊ะ
+--
+-- และ 68.58 เป็นค่าที่ผิดด้วย  ยิงเรย์วัดแล้วพื้นอยู่ที่ 67.6
+-- ส่วน HRP ตอนยืนบนพื้นจริงอยู่ที่ 70.673 (HipHeight 2.10 + ครึ่งความสูง HRP)
+-- 68.58 คือจมลงไปในพื้นราว 1 stud
+--
+-- X ใช้ IDLE_X (552.8 - 40 = 512.8) ไม่ใช่ 513.43 ด้วยเหตุผลเดียวกัน
+Hub.HOME = { X = 512.80, Y = 70.60, Z = -364.74 }
 genv.EGG_FARM_HUB = Hub
 
 -- ยังเป็นรุ่นล่าสุดอยู่ไหม
@@ -534,6 +546,20 @@ local Config = {
 	-- ตั้ง false ถ้าไม่อยากให้เขียนไฟล์เลย
 	Trace = true,
 
+	-- ห้ามเปิด  วัดแล้วว่าทำให้เก็บไข่ไม่ติดเป็นพักๆ
+	--
+	-- มันเรียก Signal.Invoke(GET_DEBUG_SNAPSHOT) 4 ครั้ง/วินาที จากในลูปเดินทาง
+	-- ซึ่งเป็น BindableFunction ของโมดูลกันโกงเอง  การไปเรียกถี่ๆ ระหว่างเคลื่อนที่
+	-- ทำให้เซิร์ฟเลิกเชื่อถือการเคลื่อนที่เป็นช่วงๆ แล้วปฏิเสธคำสั่งหยิบไข่
+	--
+	-- วัดเทียบตัวแปรเดียว 150 วินาที ไอดีเดียวกัน ห้องเดียวกัน ที่ 320 st/s:
+	--     true  -> เก็บได้  9 ฟอง | "Movement is not currently trusted" 5 ครั้ง
+	--     false -> เก็บได้ 13 ฟอง | ปฏิเสธ 0 ครั้ง
+	--
+	-- Hub.acSnapshot / Hub.acDanger ยังใช้ได้อยู่ เรียกมือเวลาไล่บั๊กได้ปกติ
+	-- แต่ห้ามให้มันวิ่งอัตโนมัติระหว่างเดินทาง
+	DangerBrake = false,
+
 	----------------------------------------------------------------
 	-- เฝ้าช่องที่ไคลเอนต์คุยกับเซิร์ฟ (ดู Hub.watchNetwork)
 	----------------------------------------------------------------
@@ -547,7 +573,24 @@ local Config = {
 	-- ผลคือ MuteViolation ถูกบังคับเป็น false ตลอดกาล และ NetWatch เป็น true ตลอดกาล
 	-- ใครตั้งอะไรใน loader ก็ไม่มีผล = สวิตช์ทั้งสองตัวเป็นของหลอก
 	-- และการทดลองเปิด/ปิดตัวเฝ้าที่ผ่านมา จึงเป็นการเทียบ "เปิด กับ เปิด" มาตลอด
-	NetWatch = true,
+	-- ห้ามเปิด  พิสูจน์แล้วว่าทำให้เก็บไข่ไม่ได้
+	--
+	-- ตัวเฝ้านี้ครอบ Network.Fire / Network.Invoke ซึ่งเป็นเส้นทางเดียวกับที่
+	-- ไคลเอนต์ส่งรายงานการเคลื่อนที่ขึ้นเซิร์ฟ  พอครอบแล้วรายงานเพี้ยน
+	-- Runtime.luau มี InvalidHeartbeatCount ที่นับจังหวะที่รายงานขาดหาย
+	-- เซิร์ฟจึงเลิกเชื่อถือการเคลื่อนที่ของเรา แล้วปฏิเสธคำสั่งหยิบไข่ทุกครั้ง
+	--
+	-- วัดเทียบตัวแปรเดียว 150 วินาทีต่อรอบ บนไอดีเดียวกัน ห้องเดียวกัน:
+	--     เปิด  -> "Movement is not currently trusted" 25+22 ครั้ง · ข้ามไข่ 24 · เก็บได้ 0
+	--     ปิด   -> ข้อความนั้น 0 ครั้ง · ข้ามไข่ 0 · ปฏิเสธรวม 1 ("Egg not found")
+	--
+	-- และเหตุผลที่สร้างมันขึ้นมาก็ตกไปแล้ว: MuteViolation ไม่เคยทำงานจริงสักครั้ง
+	-- (คีย์ไม่ได้อยู่ในตาราง Config จึงโดน mergeConfig ทิ้งทุกชั้น)
+	-- อีกทั้งระบบกันโกงชุดนั้นอยู่ฝั่งไคลเอนต์ และเซิร์ฟมีประวัติตำแหน่งของตัวเอง
+	-- (AntiCheatService.GetHistoricalPosition) ซึ่งบล็อกยังไงก็ไม่หาย
+	--
+	-- เก็บโค้ดไว้เผื่อวันหลังอยากไล่ต่อ แต่ต้องตั้ง NetWatch = true เองเท่านั้น
+	NetWatch = false,
 	MuteViolation = false,
 }
 Hub.Config = Config
@@ -559,6 +602,17 @@ local AREAS = {
 }
 
 local GAMEPLAY_LINE_X = 552.8
+
+-- เลนวิ่งเริ่มต้น  ตัวจริงที่ใช้คือ Hub.LaneZ ซึ่งขยับเองได้ (ดู Hub.pickLaneZ)
+--
+-- ทำไมไม่ฮาร์ดโค้ดหนีลูกวิ่ง:
+-- ตัวที่วางกลางแมพ (workspace.AdminTreadmill) เป็นของอีเวนต์ มาเป็นช่วงแล้วหายไป
+-- วัดตอนมีอยู่: กิน X 524.4-557.5 · Z -385.2 ถึง -343.9 · Y 67.1-95.3
+-- เลน -364 อยู่กลางกล่องพอดีทั้งแกน Z และ Y = ทะลุตัวมันทุกเที่ยว (ระยะ 0.0 studs)
+-- วัดอีกครั้งหลังอีเวนต์จบ: หายไปแล้วจริง เหลือแค่ __ClientTreadmillRenders
+--
+-- ตั้งเลนหนีไว้ตายตัวจึงเป็นการตอบโจทย์ที่ขยับได้ด้วยคำตอบที่ขยับไม่ได้
+-- ปล่อยให้มันวัดเองตอนรันดีกว่า อีเวนต์หน้ามาวางตรงไหนก็หลบถูก
 local LANE_Z, LANE_Y  = -364, 70.6
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
@@ -654,148 +708,70 @@ local function mergeConfig(dst, src)
 	end
 end
 
+--==================================================================
+-- ไม่จำคอนฟิกลงดิสก์อีกต่อไป
+--
+-- ใช้เฉพาะค่าที่ตั้งไว้ตอนรันปัจจุบันเท่านั้น:
+--     ค่าเริ่มต้นในไฟล์นี้  ->  _G.HamsterConfig จาก loader
+-- จบแค่นั้น ไม่มีชั้นที่มาจากไฟล์บนเครื่องลูกค้าแล้ว
+--
+-- ทำไมต้องถอดออกทั้งระบบ:
+--
+-- ของเดิม loadUserConfig() เขียน StealAnEgg_Settings.lua ลงเครื่องลูกค้า
+-- ตอนรันครั้งแรก แล้วอ่านกลับทุกครั้งตลอดไป  และเขียนเฉพาะตอนไฟล์ยังไม่มี
+-- ไม่เคยอัปเดตเลยสักครั้ง
+--
+-- ผลคือลูกค้าถูกป้อนเทมเพลตของบิลด์ "วันที่เขาติดตั้งครั้งแรก" ไปตลอดชีวิต
+-- ในเทมเพลตเก่ามี MoveMode = "step" · Step 55 · Gap 0.10 (= 550 studs/s)
+-- และ ShowUI = true  คีย์ไหนที่ loader ไม่ได้ตั้ง จะตกไปใช้ค่าพวกนี้
+--
+-- นี่คือคำอธิบายที่ตรงที่สุดของอาการ "รันบิลด์เดียวกัน แต่บางคนโดนเตะ บางคนไม่โดน"
+-- และอธิบายด้วยว่าทำไมเครื่องที่ใช้พัฒนาไม่เคยเป็น
+-- (ไฟล์บนเครื่องนั้นตรงกับบิลด์ปัจจุบันเสมอ เพราะเขียนใหม่ทุกครั้งที่แก้โค้ด)
+--
+-- ตอนนี้อยากเปลี่ยนค่าอะไร แก้ที่ loader อย่างเดียว = เห็นสิ่งที่รันจริงเสมอ
+--==================================================================
+
+-- เหลือไว้เป็นฟังก์ชันเปล่า เพราะมีที่เรียกอยู่หลายจุด
+-- ถอดออกทั้งหมดจะกระทบ UI โดยไม่จำเป็น และเสี่ยงพลาดมากกว่าปล่อยให้เป็น no-op
 local function saveConfig()
-	if type(writefile) ~= "function" then return false end
-	local snapshot = deepCopy(Config)
-	snapshot.Running = false   -- ไม่เซฟสถานะ "กำลังวิ่ง" ครั้งหน้าจะได้ไม่ออกวิ่งเอง
-	return (pcall(function()
-		writefile(CONFIG_FILE, HttpService:JSONEncode(snapshot))
-	end))
-end
-
-local function loadConfig()
-	if type(readfile) ~= "function" or type(isfile) ~= "function" then return false end
-	local exists = false
-	pcall(function() exists = isfile(CONFIG_FILE) end)
-	if not exists then return false end
-
-	local ok, data = pcall(function() return HttpService:JSONDecode(readfile(CONFIG_FILE)) end)
-	if not ok or type(data) ~= "table" then return false end
-	data.Running = nil
-	mergeConfig(Config, data)
-	return true
+	return false
 end
 
 local function resetConfig()
 	mergeConfig(Config, deepCopy(DEFAULTS))
 	Config.Running = false
-	saveConfig()
 end
+
+-- (ตัวลบไฟล์เก่าอยู่ล่างลงไป ตรงจุดที่ USER_CONFIG_FILE ถูกประกาศแล้ว)
 
 local configDirty = false
 local function markDirty() configDirty = true end
 
 --==================================================================
--- ไฟล์คอนฟิกแยก (แก้เองได้ ไม่ต้องยุ่งกับสคริปต์)
+-- ชื่อไฟล์เก่า  เก็บไว้เพื่อ "ลบทิ้ง" อย่างเดียว ไม่มีการอ่านแล้ว
 --
--- StealAnEgg_Settings.lua  อยู่ในโฟลเดอร์ workspace ของ executor
--- เปิดแก้ด้วย notepad ได้เลย แก้เสร็จรันสคริปต์ใหม่ก็ใช้ค่าใหม่ทันที
---
--- ลำดับการโหลด: ค่าเริ่มต้น -> ไฟล์ JSON ที่ UI เซฟ -> ไฟล์คอนฟิกแยกนี้
--- ไฟล์แยกมาท้ายสุดจึงชนะเสมอ เพราะเป็นไฟล์ที่คุณตั้งใจแก้เอง
--- (ถ้าอยากให้ UI คุมแทน ก็ลบไฟล์นี้ทิ้ง เดี๋ยวมันสร้างใหม่ให้)
+-- บิลด์ก่อนหน้าเขียนสองไฟล์นี้ลงเครื่องลูกค้าแล้วอ่านกลับทุกครั้ง
+-- ตอนนี้ถอดชั้นการอ่านออกหมดแล้ว (ดูคอมเมนต์ยาวที่ saveConfig)
 --==================================================================
 local USER_CONFIG_FILE = "StealAnEgg_Settings.lua"
 
-local CONFIG_TEMPLATE = [==[
--- ==============================================
---  Hamsterdiwa — Steal An Egg  ไฟล์ตั้งค่า
---  แก้ค่าในนี้ได้เลย แล้วรันสคริปต์ใหม่
---  ลบไฟล์นี้ทิ้ง = กลับไปใช้ค่าจาก UI
--- ==============================================
-return {
-
-	--------------------------------------------------
-	-- ด่านที่จะไปเก็บ
-	--------------------------------------------------
-	-- "ALL" = คัดไข่ $/s สูงสุดจากทุกด่าน  (แนะนำ)
-	-- หรือระบุเอง: Lake · Desert · Jungle · Snow · Volcano · Abyss Ocean · Prehistoric · Cosmic
-	Area = "ALL",
-
-	-- เริ่มฟาร์มเองทันทีที่โหลดเสร็จ (หน่วง 3 วิ ให้เกมพร้อมก่อน)
-	-- false = ต้องไปกดสวิตช์ "เริ่มฟาร์ม" ใน UI เอง
-	AutoStart = false,
-
-	-- false = ไม่เปิดหน้าต่าง UI เลย  ใช้ตอนสั่งงานผ่านคอนฟิกล้วนๆ
-	-- ประหยัดเฟรม เหมาะกับเปิดหลายจอทิ้งไว้
-	ShowUI = true,
-
-	--------------------------------------------------
-	-- ความเร็ว / การเคลื่อนที่
-	--------------------------------------------------
-	-- "step"  = วาปเป็นก้อนแล้วพัก  เร็วได้ถึง 550 st/s  (ใช้คู่ SmoothCam แล้วภาพดูนิ่ง)
-	-- "tween" = ลากต่อเนื่องทุกเฟรม ภาพลื่นจริง แต่ต้องช้าราว 100 st/s ไม่งั้นโดนดึงกลับ
-	MoveMode = "step",
-
-	Step = 55,      -- ระยะต่อการวาป 1 ครั้ง (เพดานที่วัดได้ = 60 เกินนี้พัง)
-	Gap  = 0.10,    -- พักระหว่างวาป  ความเร็ว = Step / Gap
-	                -- step:  0.10 = 550 · 0.15 = 366 · 0.25 = 220
-	                -- tween: 0.55 = 100 · 0.80 = 70 (ปลอดภัยสุด)
-
-	WarmupSteps  = 8,     -- หลังข้ามเส้นเข้าโซน ไต่ช้าๆ กี่ก้าวก่อนเร่ง (0 = ไม่ไต่)
-	WarmupGapMul = 2.5,   -- ช่วงไต่ ช้าลงกี่เท่า
-
-	SafeZonePause = 1.5,  -- ขากลับ ตรึงนิ่งที่หน้า SAFE ZONE กี่วิ ก่อนเข้าแปลง
-
-	Noclip = false,       -- ห้ามเปิด: CanCollide replicate ขึ้นเซิร์ฟ = โดนเตะ
-
-	--------------------------------------------------
-	-- ภาพ
-	--------------------------------------------------
-	SmoothCam = true,     -- กล้องไล่ตามแบบนุ่ม แก้ภาพกระตุก (ไม่แตะตัวละคร ไม่มีความเสี่ยง)
-	CamSmooth = 8,        -- สูง = ตามไว · ต่ำ = นุ่มขึ้นแต่ตามช้า (แนะนำ 6-10)
-
-	PerfMode = true,      -- ใช้ตัวตั้งค่าของเกม: ซ่อนสัตว์คนอื่น · ปิดวิดีโอ · ปิดเพลง/เสียง
-
-	--------------------------------------------------
-	-- งานที่ฐาน
-	--------------------------------------------------
-	AutoHatch   = true,   -- ฟักไข่ที่พร้อม + ปล่อยสัตว์ลงคอก
-	AutoUpgrade = true,   -- อัปเกรดฐานเมื่อเงินถึง (เงินในเกม ไม่ใช่ Robux)
-	AutoSell    = true,   -- ขายสัตว์ตัวที่ล้นคอก
-
-	KeepExtra = 0,        -- เก็บสำรองเกินช่องคอกกี่ตัวก่อนเริ่มขาย
-	KeepAbove = 0,        -- เก็บตัวที่ $/s ตั้งแต่เท่านี้ขึ้นไปเสมอ (0 = ไม่สนราคา)
-	                      -- เช่น 500000 = ตัวไหนถึงครึ่งล้านเก็บไว้หมด
-
-	--------------------------------------------------
-	-- อื่นๆ
-	--------------------------------------------------
-	SkipWeak    = true,   -- ไข่ที่กากกว่าตัวอ่อนสุดในคอก ไม่ต้องไปเก็บ
-	TripReserve = 40,     -- เหลือเวลาก่อนรีเซ็ตน้อยกว่านี้ (วิ) = ไม่ออกไปไหน
-	LoopDelay   = 2,      -- พักระหว่างรอบ (วิ)
-	AntiAFK     = true,
-
-	AutoSaveConfig = true,
-}
-]==]
-
-local function writeUserConfig()
-	if type(writefile) ~= "function" then return false end
-	return (pcall(function() writefile(USER_CONFIG_FILE, CONFIG_TEMPLATE) end))
-end
-
--- คืน true ถ้าโหลดไฟล์แยกมาใช้จริง
-local function loadUserConfig()
-	if type(readfile) ~= "function" or type(isfile) ~= "function" then return false end
-
-	local exists = false
-	pcall(function() exists = isfile(USER_CONFIG_FILE) end)
-	if not exists then
-		writeUserConfig()   -- ยังไม่มี สร้างไฟล์ตัวอย่างให้แก้
-		return false
+-- ลบไฟล์ที่บิลด์เก่าทิ้งไว้บนเครื่องลูกค้า
+--
+-- ไม่ลบก็ได้ ไฟล์จะนอนอยู่เฉยๆ ไม่มีใครอ่านแล้ว
+-- แต่ลบให้จบเลยดีกว่า เผื่อวันหลังมีใครต่อชั้นการอ่านกลับเข้ามาอีก
+-- ปัญหาเดิมจะได้ไม่กลับมาแบบเงียบๆ โดยไม่มีใครนึกถึง
+local function purgeDiskConfig()
+	if type(delfile) ~= "function" or type(isfile) ~= "function" then return 0 end
+	local n = 0
+	for _, name in ipairs({ CONFIG_FILE, USER_CONFIG_FILE }) do
+		local exists = false
+		pcall(function() exists = isfile(name) end)
+		if exists and pcall(delfile, name) then n = n + 1 end
 	end
-
-	local ok, chunk = pcall(function() return loadstring(readfile(USER_CONFIG_FILE)) end)
-	if not ok or type(chunk) ~= "function" then return false end
-
-	local ok2, data = pcall(chunk)
-	if not ok2 or type(data) ~= "table" then return false end
-
-	mergeConfig(Config, data)
-	Config.Running = false   -- กันไม่ให้ไฟล์สั่งให้ออกวิ่งเองตอนเปิด
-	return true
+	return n
 end
+
 
 --==================================================================
 -- คอนฟิกแบบตั้งก่อนโหลด (_G.HamsterConfig)
@@ -818,9 +794,12 @@ local function loadGlobalConfig()
 	return true
 end
 
-local configLoaded = loadConfig()
-local userConfigLoaded = loadUserConfig()
+-- ชั้นเดียวเท่านั้น: ค่าเริ่มต้นในไฟล์นี้ + _G.HamsterConfig จาก loader
+-- ไม่มีการอ่านไฟล์บนเครื่องลูกค้าแล้ว  สิ่งที่รันคือสิ่งที่เขียนไว้ใน loader เสมอ
 local globalConfigLoaded = loadGlobalConfig()
+
+-- กวาดไฟล์ที่บิลด์เก่าทิ้งไว้ให้หมด
+local purged = purgeDiskConfig()
 
 --==================================================================
 -- บังคับปิดของที่ทำให้โดนเตะ  ห้ามคอนฟิกใดๆ เปิดได้
@@ -855,8 +834,10 @@ Config.BlockDeath = false
 -- ค่าเริ่มต้นเป็น false และควรอยู่อย่างนั้นจนมีหลักฐานจาก Hub.NetSeen ก่อน
 Config.MuteViolation = Config.MuteViolation == true
 
--- ตัวเฝ้า (นับเฉยๆ ไม่บล็อก) ค่าเริ่มต้นเปิด ปิดได้จาก loader ถ้าต้องตัดออกจากสมการ
-Config.NetWatch = Config.NetWatch ~= false
+-- ตัวเฝ้าช่องเซิร์ฟ: ต้องตั้ง true เองเท่านั้น
+-- วัดแล้วว่ามันทำให้เซิร์ฟเลิกเชื่อถือการเคลื่อนที่ จนเก็บไข่ไม่ได้เลย
+-- (ดูตัวเลขเทียบที่คีย์ NetWatch ในตาราง Config)
+Config.NetWatch = Config.NetWatch == true
 
 -- โหมดเคลื่อนที่ต้องเริ่มที่ warp เสมอ ห้ามให้ไฟล์บนดิสก์กำหนด
 --
@@ -1776,38 +1757,27 @@ Hub.onTreadmill = function(pos)
 end
 
 -- ปลดออกจากลูกวิ่ง: กระโดดตัดสถานะ แล้วตรึงไว้นอกขอบทันที
-Hub.unstickTreadmill = function()
-	local c = LocalPlayer.Character
-	local hrp = c and c:FindFirstChild("HumanoidRootPart")
-	local hum = c and c:FindFirstChildOfClass("Humanoid")
-	if not (hrp and hum) or hum.Health <= 0 then return false end
-
-	local on, part = Hub.onTreadmill(hrp.Position)
-	if not on then return false end
-
-	-- หาจุดนอกขอบด้านที่ใกล้ที่สุด แล้วยึดตรงนั้น
-	local safe = hrp.Position
-	if part then
-		local half = part.Size * 0.5
-		local lp = part.CFrame:PointToObjectSpace(hrp.Position)
-		local outZ = (half.Z + 6) * (lp.Z >= 0 and 1 or -1)
-		safe = part.CFrame:PointToWorldSpace(Vector3.new(lp.X, lp.Y, outZ))
-	end
-
-	pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-	for _ = 1, 10 do
-		if not (hrp.Parent and hum.Health > 0) then break end
-		pcall(function()
-			hrp.CFrame = CFrame.new(safe)
-			hrp.AssemblyLinearVelocity = Vector3.zero
-			hrp.AssemblyAngularVelocity = Vector3.zero
-		end)
-		task.wait(0.06)
-	end
-	Hub.Unstuck = (Hub.Unstuck or 0) + 1
-	log("ปลดจากลูกวิ่งแล้ว")
-	return true
-end
+-- Hub.unstickTreadmill ถูกลบทิ้ง อย่าใส่กลับ
+--
+-- มันใช้ไม่ได้มาตั้งแต่ต้น และเราเพิ่งรู้เหตุผลตอนอ่านโค้ดเกมจริง
+--
+-- ทางออกจากลูกวิ่งของไคลเอนต์มาตรฐานมีทางเดียว  StarterPlayerScripts/GUI/TreadmillUI:559-571
+--     UserInputService.JumpRequest:Connect(function()
+--         if u3 == nil or u2 then return end
+--         u2 = true
+--         if Network.Invoke(Treadmills3.REQUEST_UNEQUIP) ~= true then u2 = false end
+--     end)
+--
+-- คือ "การกดกระโดด" ไม่ได้สลัดสถานะด้วยตัวมันเอง  สคริปต์ UI ดักอินพุตแล้วยิงรีโมทให้
+-- และ UserInputService.JumpRequest ยิงจาก "อินพุตจริง" เท่านั้น
+-- Humanoid.Jump = true กับ Humanoid:ChangeState(Jumping) ไม่ทำให้มันยิง
+--
+-- ตัวเก่าจึงกระโดดแล้วตรึงตำแหน่ง 10 รอบ x 0.06 วิ = แช่ glide 0.6 วินาที
+-- กระตุกไปด้านข้าง เสี่ยงร่วงตกแมพ (คอมเมนต์ในไฟล์นี้บันทึกไว้เองว่าเคยร่วง y 65 -> -300)
+-- แลกกับผลลัพธ์ที่เป็นศูนย์  แถมถูกเรียกทุกรอบของตัวเฝ้าโดยดูแค่ตำแหน่ง
+-- ซึ่งไร้ความหมายเพราะสถานะติดตัวไปไกลเป็นพันๆ studs
+--
+-- ตัวที่ปลดได้จริงคือ Hub.clearTreadmillState ซึ่งยิง RemoteFunction ตรงๆ
 
 --==================================================================
 -- ปลดสถานะลูกวิ่งค้าง
@@ -1825,57 +1795,265 @@ end
 --   กระโดดแล้วตรึง CFrame ทันที -> ไม่เข้า Freefall -> แต้มยังขึ้น +108/6วิ  ไม่หลุด
 --   กระโดดแล้วปล่อยลอยเอง       -> Freefall x8 -> แต้มเหลือ +6/6วิ          หลุด
 -- ต้องหยุดเขียน CFrame ระหว่างนั้น ไม่งั้นตัวไม่มีวันพ้นพื้น
-local lastWS, wsRose, lastFixAt = nil, 0, 0
+local lastFixAt = 0
 
+--==================================================================
+-- ลูกวิ่ง: ใช้สัญญาณจริงของเกม ไม่เดาจาก WalkSpeed อีกแล้ว
+--
+-- อ่านจากเกมสด (PlaceVersion 7) ยืนยันว่ามีอยู่จริงทั้งสองตัว:
+--
+--   ReplicatedStorage.Network["Treadmills: ActiveTreadmillChanged"]  RemoteEvent
+--       ยิงมาเมื่อสถานะเปลี่ยน  พารามิเตอร์เดียว = ชื่อลูกวิ่ง (nil = ไม่ได้ติดแล้ว)
+--       นี่คือตัวชี้ขาด ไม่ต้องอนุมานจากอะไรทั้งนั้น
+--
+--   ReplicatedStorage.Network["Treadmills: RequestUnequip"]  RemoteFunction
+--       ตัวปลดจริง  ไคลเอนต์มาตรฐานเรียกมันจาก UserInputService.JumpRequest
+--       แล้วเช็คว่าคืน true  แปลว่า "การกระโดด" เป็นแค่ปุ่มที่ไปเรียกตัวนี้
+--       เราเรียกตรงๆ ได้เลย ไม่ต้องกระโดด
+--
+-- ทำไมต้องเลิกกระโดด:
+-- ท่าเดิมกระโดดแล้วรอ 2 วินาทีโดยห้ามเขียน CFrame  ซึ่งเคยทำให้ร่วงตกแมพตาย
+-- (y 65 -> 52 -> -12 -> -130 -> -300) จนต้องใส่เรย์เช็คพื้นกันไว้อีกชั้น
+-- เรียกรีโมทตรงๆ ไม่ต้องลอย ไม่ต้องหยุด glide ไม่มีความเสี่ยงนั้นเลย
+--
+-- เรื่อง "ติดลูกวิ่งแล้วเก็บไข่ไม่ติด" ยังไม่มีข้อสรุป อย่าเพิ่งเชื่ออะไร
+--
+-- เคยเขียนไว้ตรงนี้ว่าเป็นเพราะ Tool-strip hook  ตรวจซ้ำแล้วผิด
+-- ระหว่างติดสถานะเกมต่อ hook นี้ไว้จริง (GUI/TreadmillUI/Visibility:86-95)
+--     Character.ChildAdded:Connect(function(c)
+--         if c:IsA("Tool") then Humanoid:UnequipTools() end
+--     end)
+-- แต่ "ไข่ในสนาม" ไม่ใช่ Tool
+--     ReplicatedStorage.Library.Types.AreaEggs:65-72 นิยาม AreaEggCarryState
+--     เป็นตารางธรรมดา { IsCarrying, Uid, AreaId, AssetCategory, ... }
+--     ส่งผ่าน Eggs: AreaEggCarryState  และทั้งเส้นทางไม่มี Instance.new("Tool") เลย
+--     ค้นคำว่า Treadmill ใน EggCmds / Game.AreaEggs ก็ไม่เจอสักที่
+-- แปลว่าฝั่งไคลเอนต์ไม่มีด่านที่กั้นการเก็บไข่ตอนติดลูกวิ่งเลย  เหตุอยู่ฝั่งเซิร์ฟ
+--
+-- hook นั้นพังของจริงอยู่อย่างหนึ่ง: "ไข่ในกระเป๋าที่ต้องถือไปวางลงแปลง"
+-- อันนั้นเป็น Tool จริง (BackpackController/Main:1871-1892 มี ItemType="Asset")
+-- ระหว่างติดสถานะจึงวางไข่ลงแปลงไม่ได้ และใช้ gear ไม่ได้
+--
+-- ห้ามไปตัดการเชื่อมต่อนั้นเด็ดขาด  ปลดสถานะให้ถูกวิธีแล้วเกมคืนให้เอง
+--
+-- วิธีหาคำตอบจริง: Network.Invoke("Eggs: RequestCarryAreaEgg", ...) คืน (ok, reason)
+-- ไคลเอนต์มาตรฐานล็อกไว้เองที่ Game.AreaEggs:220
+--     Area egg carry denied for {uid}: {reason}
+-- เก็บ reason จริงมาสักรอบแล้วจะรู้ทันทีว่าเซิร์ฟปฏิเสธด้วยเหตุอะไร
+--==================================================================
+local TREAD_CHANGED = "Treadmills: ActiveTreadmillChanged"
+local TREAD_UNEQUIP = "Treadmills: RequestUnequip"
+
+-- ต่อสัญญาณครั้งเดียวตอนโหลด  ต่อกับรีโมทดิบตรงๆ
+-- ไม่ผ่าน Network.Fired ของเกม เพราะตัวนั้นจะไปสร้าง BindableEvent ผูกบัญชีไว้ด้วย
+Hub.watchTreadmill = function()
+	if Hub.TreadHooked then return true end
+	local net = ReplicatedStorage:FindFirstChild("Network")
+	local ev = net and net:FindFirstChild(TREAD_CHANGED)
+	if not ev or not ev:IsA("RemoteEvent") then return false end
+
+	ev.OnClientEvent:Connect(function(name)
+		Hub.TreadmillActive = (name ~= nil)
+		Hub.TreadmillName = name
+		if name ~= nil then
+			Hub.TreadSeen = (Hub.TreadSeen or 0) + 1
+			-- ปลดทันที ไม่ต้องรอตัวเฝ้ารอบถัดไป
+			task.spawn(function() pcall(Hub.clearTreadmillState) end)
+		end
+	end)
+	Hub.TreadHooked = true
+	return true
+end
+
+-- เหลือไว้ให้ตัวเฝ้าเรียก  ตอนนี้อ่านจากสถานะจริง ไม่ได้เดาแล้ว
 Hub.treadmillStuck = function()
-	local c = LocalPlayer.Character
-	local hum = c and c:FindFirstChildOfClass("Humanoid")
-	if not hum or hum.Health <= 0 then lastWS = nil return false end
-	local ws = hum.WalkSpeed
-	if lastWS and ws > lastWS + 0.002 then
-		wsRose = wsRose + 1
-	elseif lastWS and ws <= lastWS then
-		wsRose = 0
+	return Hub.TreadmillActive == true
+end
+
+--==================================================================
+-- เลือกเลนวิ่งเองตอนรัน  กันของอีเวนต์ที่มาวางขวางเป็นช่วงๆ
+--
+-- หลบเฉพาะของที่ "สูงถึงระดับเลน" เท่านั้น
+-- สายพานของแปลง 7 อันเป็นแผ่นบางที่ y 67.6767 (หนา 0.001) ซึ่งอยู่ใต้เลน
+-- หลบมันด้วยการขยับ Z ไม่ได้ เพราะมันกระจายอยู่ทั่วทุกแปลง
+-- แต่ของอีเวนต์สูง 67-95 = ขวางเลนจริง อันนั้นหลบได้และต้องหลบ
+--
+-- ราคาถูก: ไล่เฉพาะลูกของ workspace ชั้นเดียว (101 ตัว) ที่ชื่อมีคำว่า tread
+-- ไม่ได้ไล่ทั้งฉากซึ่งมีของเป็นหมื่นชิ้น
+--==================================================================
+Hub.LaneZ = LANE_Z
+
+--==================================================================
+-- ตรวจอีเวนต์  ใช้เครื่องหมายของเกมเอง ไม่ต้องรู้จักชื่ออีเวนต์ล่วงหน้า
+--
+-- เกมตั้ง attribute ไว้บน Workspace ตอนอีเวนต์ทำงาน:
+--     workspace:GetAttribute("Event_GreatBloom") = true
+--     workspace:GetAttribute("GreatBloomEndsAt") = 1787414075.26   (เวลา unix ที่จะจบ)
+-- อ่านมาจากโค้ดเกม GuardAreas/AreaNotificationTracker:106
+--     if p19 == "Cherry Blossom" and not workspace:GetAttribute("Event_GreatBloom") then
+--
+-- รายชื่ออีเวนต์ทั้งหมดอยู่ที่ ReplicatedStorage.CmdrClient.Types.AdminEventType บรรทัด 3:
+--     RecoveryEvent · DemonicEvent · Countdown · DragonEggEvent · GreatBloom · AdminAbuse
+-- และมีคำสั่งแอดมิน startEvent · stopEvent · globalStartEvent · globalStopEvent
+--     · globalScheduleEvent · globalRemoveScheduledEvent
+-- = อีเวนต์ตั้งเวลาล่วงหน้าได้ และจะมีมาเรื่อยๆ
+--
+-- เราจึงไม่ไล่ชื่อทีละตัว  อ่านคีย์ที่ขึ้นต้นด้วย Event_ ทั้งหมด
+-- อีเวนต์ใหม่ที่เกมเพิ่มมาทีหลังก็เข้าเงื่อนไขนี้เองโดยไม่ต้องแก้โค้ด
+--==================================================================
+Hub.activeEvents = function()
+	local out = {}
+	local ok = pcall(function()
+		for k, v in pairs(workspace:GetAttributes()) do
+			local s = tostring(k)
+			if s:sub(1, 6) == "Event_" and v then out[#out + 1] = s:sub(7) end
+		end
+	end)
+	if not ok then return {} end
+	table.sort(out)
+	return out
+end
+
+-- ลายเซ็นสั้นๆ ของชุดอีเวนต์ที่กำลังทำงาน  ราคาถูกมาก เรียกบ่อยได้
+local function eventSig()
+	return table.concat(Hub.activeEvents(), ",")
+end
+
+Hub.pickLaneZ = function(force)
+	-- อีเวนต์เปลี่ยน = ของบนแมพเปลี่ยน  ต้องวัดใหม่ทันทีไม่ต้องรอครบรอบ
+	local sig = eventSig()
+	if sig ~= Hub.EventSig then
+		Hub.EventSig = sig
+		Hub.EventChanges = (Hub.EventChanges or 0) + 1
+		force = true
+		if sig ~= "" then log("อีเวนต์กำลังทำงาน: " .. sig .. " - วัดเลนใหม่") end
 	end
-	lastWS = ws
-	return wsRose >= 4   -- ขึ้นติดกัน 4 ครั้ง (ราว 4 วินาที) = ค้างแน่
+
+	if not force and os.clock() - (Hub.LanePickAt or -1e9) < 15 then return Hub.LaneZ end
+	Hub.LanePickAt = os.clock()
+
+	-- ที่ที่ของอีเวนต์ไปโผล่ วัดจากของจริงสองอีเวนต์:
+	--   AdminAbuse -> workspace.AdminTreadmill (ลูกตรงของ workspace)
+	--   GreatBloom -> workspace.__OBJECTS.Build.CherryBlossomZone
+	-- จึงดูสองที่นี้ ไม่ไล่ทั้งฉาก
+	local roots = { workspace }
+	local obj = workspace:FindFirstChild("__OBJECTS")
+	if obj and obj:FindFirstChild("Build") then roots[#roots + 1] = obj.Build end
+
+	-- รวมชิ้นส่วนที่สูงคร่อมระดับเลน
+	local blockers, budget = {}, 40000
+	for _, root in ipairs(roots) do
+	for _, d in ipairs(root:GetChildren()) do
+		local n = d.Name:lower()
+		-- ลูกวิ่งดูตลอด  ของอีเวนต์ดูเฉพาะตอนมีอีเวนต์ (ไม่งั้นเสียแรงเปล่าทุกรอบ)
+		if n:find("tread") or n:find("runner") or (sig ~= "" and not n:find("^%d+$")) then
+			for _, x in ipairs(d:GetDescendants()) do
+				budget = budget - 1
+				if budget <= 0 then break end
+				if x:IsA("BasePart") and x.CanCollide then
+					local cf, s = x.CFrame, x.Size
+					-- กล่องครอบในพิกัดโลก เผื่อชิ้นส่วนถูกหมุน
+					local ry = math.abs(cf.RightVector.Y) * s.X * 0.5
+						+ math.abs(cf.UpVector.Y) * s.Y * 0.5
+						+ math.abs(cf.LookVector.Y) * s.Z * 0.5
+					local py = cf.Position.Y
+					-- คร่อมระดับเลนไหม (เผื่อความสูงตัวละคร 3 studs)
+					if py + ry > LANE_Y - 3.2 and py - ry < LANE_Y + 3.2 then
+						local rx = math.abs(cf.RightVector.X) * s.X * 0.5
+							+ math.abs(cf.UpVector.X) * s.Y * 0.5
+							+ math.abs(cf.LookVector.X) * s.Z * 0.5
+						local rz = math.abs(cf.RightVector.Z) * s.X * 0.5
+							+ math.abs(cf.UpVector.Z) * s.Y * 0.5
+							+ math.abs(cf.LookVector.Z) * s.Z * 0.5
+						local px, pz = cf.Position.X, cf.Position.Z
+						-- เก็บเฉพาะที่อยู่ในช่วง X ของเลน และใกล้พอในแกน Z
+						-- ไม่งั้นตอนมีอีเวนต์ลิสต์จะบวมเป็นหมื่นชิ้นโดยไม่มีประโยชน์
+						if px + rx >= 400 and px - rx <= 1200 and math.abs(pz - LANE_Z) < 160 then
+							blockers[#blockers + 1] = { pz = pz, rz = rz }
+						end
+					end
+				end
+			end
+		end
+	end
+	end
+	Hub.LaneBlockers = #blockers
+
+	if #blockers == 0 then
+		Hub.LaneZ = LANE_Z          -- ไม่มีอะไรขวาง กลับไปเลนปกติ
+		Hub.LaneClear = 999
+		return Hub.LaneZ
+	end
+
+	-- ระยะจากเลนที่ Z นี้ ถึงชิ้นที่ใกล้ที่สุด
+	local function clearance(z)
+		local best = math.huge
+		for _, b in ipairs(blockers) do
+			local d = math.abs(z - b.pz) - b.rz
+			if d < best then best = d end
+		end
+		return best
+	end
+
+	-- อยู่ที่เดิมได้ก็อยู่  ขยับเลนกลางทางทำให้เส้นทางเปลี่ยนกะทันหัน
+	local NEED = 8
+	local nowClear = clearance(Hub.LaneZ)
+	Hub.LaneClear = nowClear        -- ต้องอัปเดตก่อนไปเทียบข้างล่าง
+	if nowClear >= NEED then return Hub.LaneZ end
+
+	-- หา Z ที่ห่างที่สุด และต้องมีพื้นตลอดเส้นด้วย
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { LocalPlayer.Character }
+	local bestZ, bestC = nil, -1
+	for z = LANE_Z - 80, LANE_Z + 80, 5 do
+		local c = clearance(z)
+		if c > bestC then
+			local grounded = true
+			for x = 400, 1200, 200 do
+				if not workspace:Raycast(Vector3.new(x, LANE_Y + 20, z),
+					Vector3.new(0, -60, 0), params) then grounded = false break end
+			end
+			if grounded then bestZ, bestC = z, c end
+		end
+	end
+
+	if bestZ and bestC > nowClear then
+		if bestZ ~= Hub.LaneZ then
+			log(("ย้ายเลนวิ่ง Z %d -> %d (ห่างของขวาง %.0f studs)"):format(Hub.LaneZ, bestZ, bestC))
+		end
+		Hub.LaneZ = bestZ
+		Hub.LaneClear = bestC
+		Hub.LaneMoves = (Hub.LaneMoves or 0) + 1
+	end
+	return Hub.LaneZ
 end
 
 Hub.clearTreadmillState = function()
-	if os.clock() - lastFixAt < 12 then return false end   -- อย่าทำถี่เกิน
-	local c = LocalPlayer.Character
-	local hum = c and c:FindFirstChildOfClass("Humanoid")
-	local hrp = c and c:FindFirstChild("HumanoidRootPart")
-	if not (hum and hrp) or hum.Health <= 0 then return false end
-
-	-- ห้ามกระโดดตรงขอบ  ยิงเรย์ลงหาพื้นก่อน ไม่เจอพื้นก็ไม่ทำ
-	-- (เคยกระโดดตรงขอบแปลงแล้วร่วงตกแมพตาย y 65 -> -300)
-	local params = RaycastParams.new()
-	params.FilterType = Enum.RaycastFilterType.Exclude
-	params.FilterDescendantsInstances = { c }
-	local hit = workspace:Raycast(hrp.Position, Vector3.new(0, -40, 0), params)
-	if not hit then return false end
+	if os.clock() - lastFixAt < 1.5 then return false end   -- กันยิงรัวตอนสัญญาณมาถี่
+	local net = ReplicatedStorage:FindFirstChild("Network")
+	local rf = net and net:FindFirstChild(TREAD_UNEQUIP)
+	if not rf or not rf:IsA("RemoteFunction") then
+		Hub.TreadNoRemote = (Hub.TreadNoRemote or 0) + 1
+		return false
+	end
 
 	lastFixAt = os.clock()
-	wsRose = 0
-	Hub.JumpHold = os.clock() + 2.2   -- บอก glide ให้หยุดเขียน CFrame ชั่วคราว
 	Hub.Phase = "ปลดสถานะลูกวิ่ง"
 
-	pcall(function()
-		hum.Jump = true
-		hum:ChangeState(Enum.HumanoidStateType.Jumping)
-	end)
-	-- รอให้ลอยพ้นพื้นจริงแล้วลงพื้น ห้ามเขียน CFrame ระหว่างนี้เด็ดขาด
-	local t0 = os.clock()
-	while os.clock() - t0 < 2 do
-		local st = hum:GetState()
-		if st == Enum.HumanoidStateType.Landed and os.clock() - t0 > 0.5 then break end
-		task.wait(0.05)
+	-- ไคลเอนต์มาตรฐานเช็คว่าคืน true  เราเช็คแบบเดียวกัน
+	-- ห่อ pcall เพราะ InvokeServer ค้างได้ถ้าเซิร์ฟไม่ตอบ
+	local ok, res = pcall(function() return rf:InvokeServer() end)
+	if ok and res == true then
+		Hub.TreadmillActive = false
+		Hub.TreadmillName = nil
+		Hub.TreadFixed = (Hub.TreadFixed or 0) + 1
+		log("ปลดสถานะลูกวิ่งแล้ว")
+		return true
 	end
-	Hub.JumpHold = 0
-	Hub.TreadFixed = (Hub.TreadFixed or 0) + 1
-	log("ปลดสถานะลูกวิ่งแล้ว")
-	return true
+
+	Hub.TreadFailed = (Hub.TreadFailed or 0) + 1
+	return false
 end
 
 -- กดกระโดดให้เองตอนค้าง  ไม่ต้องรู้ว่าสถานะชื่ออะไร
@@ -1960,10 +2138,12 @@ task.spawn(function()
 				end
 			end)
 
-			-- ลูกวิ่งค้าง: ตรวจจาก WalkSpeed ที่ไต่ขึ้นไม่หยุด แล้วกระโดดปลด
-			if Config.TreadmillWatch ~= false then
-				if Hub.treadmillStuck() then pcall(Hub.clearTreadmillState) end
-				pcall(Hub.unstickTreadmill)
+			-- ลูกวิ่งค้าง: อ่านจากสัญญาณจริงของเกม แล้วยิงรีโมทปลด
+			--
+			-- ตัวนี้เป็นแค่ตาข่ายกันพลาด  ปกติ Hub.watchTreadmill ปลดให้ทันที
+			-- ตั้งแต่วินาทีที่เกมยิง ActiveTreadmillChanged มาแล้ว
+			if Config.TreadmillWatch ~= false and Hub.treadmillStuck() then
+				pcall(Hub.clearTreadmillState)
 			end
 			if Config.StallWatch ~= false then pcall(Hub.unstickStalled) end
 		end
@@ -2584,6 +2764,81 @@ Hub.expireImpulse = function()
 end
 
 -- เปิดโหมดยกเว้นให้ตัวเอง  เรียกทุกเฟรมระหว่างเดินทาง
+--==================================================================
+-- อ่านสถานะระบบกันโกงตรงๆ  เลิกเดา
+--
+-- เกมมี BindableFunction ในเครื่องตัวหนึ่งที่คืนสถานะทั้งหมดของระบบกันโกง
+--     require(ReplicatedStorage.Library.Signal)
+--     Signal.Invoke(Signal.MAP.Client.ClientCharacter.GET_DEBUG_SNAPSHOT)
+-- ยืนยันสดแล้วว่าเรียกได้จริง คืนมา 64 ฟิลด์  ชื่อจริงคือ "ClientCharacter: GetDebugSnapshot"
+--
+-- เป็น Signal ในเครื่อง ไม่ใช่ NETWORK_MAP = ไม่มีอะไรวิ่งขึ้นเซิร์ฟ ความเสี่ยงต่ำมาก
+--
+-- ที่ได้มาและใช้ได้ทันที:
+--     AllowedHorizontalSpeed  ความเร็วที่ระบบยอมให้ "ไอดีนี้ ตอนนี้" เป็นตัวเลขตรงๆ
+--                             ไม่ต้องคำนวณ WalkSpeed*1.1+8 เองอีก
+--     Correction / Detection  กำลังโดนแก้ไขอยู่ไหม เห็นความผิดอะไรอยู่ไหม
+--     Evidence[]              แต่ละด่านมี Value กับ CorrectionAt = รู้ว่าใกล้โดนแค่ไหน
+--
+-- ค่าที่วัดได้จากไอดีจริง:
+--     AllowedHorizontalSpeed = 28.11
+--     Evidence  Speed 0/1.20 · Teleport 0/1.00 · Flight 0/0.75
+--
+-- ค่าคงที่ที่ดึงมาได้จากโมดูล Limits (ซึ่งไม่มีอยู่ในดัมป์ที่เคยอ่าน):
+--     SpeedEvidenceGain = 4.5   SpeedCorrectionThreshold = 1.2
+-- แปลว่าวิ่ง 320 บนเพดาน 28 โดยไม่มี ImpulseContext บัง = โดนแก้ไขใน 0.27 วินาที
+-- ทั้งหมดที่กันเราอยู่คือ ImpulseContext ที่เราปลอมขึ้นมา  ถ้ามันไม่ติดเมื่อไหร่คือจบ
+-- ตัวนี้ทำให้ "ไม่ติด" กลายเป็นสิ่งที่มองเห็นก่อนตาย แทนที่จะรู้ตอนตายไปแล้ว
+--==================================================================
+Hub.acSnapshot = function()
+	if type(Hub.SignalMod) ~= "table" then
+		local ok, mod = pcall(function()
+			return require(ReplicatedStorage.Library.Signal)
+		end)
+		if not ok or type(mod) ~= "table" then
+			Hub.SnapSkipped = "require Signal ไม่ได้"
+			return nil
+		end
+		Hub.SignalMod = mod
+		Hub.SnapKey = mod.MAP and mod.MAP.Client and mod.MAP.Client.ClientCharacter
+			and mod.MAP.Client.ClientCharacter.GET_DEBUG_SNAPSHOT
+	end
+	if not Hub.SnapKey then return nil end
+	local ok, snap = pcall(function() return Hub.SignalMod.Invoke(Hub.SnapKey) end)
+	if not ok or type(snap) ~= "table" then return nil end
+	return snap
+end
+
+-- ใกล้โดนแก้ไขแค่ไหน  คืน 0..1 (1 = ถึงเกณฑ์แล้ว) กับความเร็วที่ระบบยอมให้
+--
+-- อย่าเรียกทุกเฟรม  4 ครั้งต่อวินาทีพอ  ค่าที่คืนถูกแคชไว้ระหว่างนั้น
+Hub.acDanger = function()
+	if os.clock() - (Hub.SnapAt or -1e9) < 0.25 then
+		return Hub.Danger or 0, Hub.AllowedSpeed
+	end
+	Hub.SnapAt = os.clock()
+
+	local snap = Hub.acSnapshot()
+	if not snap then return 0, nil end
+
+	Hub.AllowedSpeed = tonumber(snap.AllowedHorizontalSpeed)
+	Hub.ACContext = tostring(snap.Context)
+	Hub.ACCorrection = tostring(snap.Correction)
+
+	local worst, which = 0, nil
+	for _, e in ipairs(snap.Evidence or {}) do
+		local v, at = tonumber(e.Value), tonumber(e.CorrectionAt)
+		if v and at and at > 0 then
+			local p = v / at
+			if p > worst then worst, which = p, tostring(e.Id) end
+		end
+	end
+	Hub.Danger = worst
+	Hub.DangerFrom = which
+	if worst > (Hub.DangerPeak or 0) then Hub.DangerPeak = worst end
+	return worst, Hub.AllowedSpeed
+end
+
 Hub.armImpulse = function(hrp)
 	if Config.ImpulseBypass == false then return false end
 	local st = Hub.acState()
@@ -2755,6 +3010,32 @@ Hub.glide = function(hrp, hum, dest)
 
 		if boosted then Hub.armImpulse(hrp) end   -- ต่ออายุทุกเฟรม ไม่งั้นหมดอายุแล้วโดนจับ
 
+		-- วาล์วนิรภัย: ถอยก่อนโดน แทนที่จะรู้ตอนตายไปแล้ว
+		--
+		-- อ่านสถานะจริงจากระบบกันโกง 4 ครั้ง/วินาที (ดู Hub.acDanger)
+		-- ตราบใดที่ ImpulseContext ปลอมยังติด หลักฐานจะอยู่ที่ 0 ตลอด
+		-- พอมันไม่ติดเมื่อไหร่ หลักฐานความเร็วจะพุ่งขึ้นด้วยอัตรา 4.5/วินาที
+		-- ถึงเกณฑ์ 1.2 ในราว 0.27 วินาที = เร็วเกินกว่าจะรอตัวเฝ้ารอบถัดไป
+		--
+		-- เกิน 0.45 = ผ่านไปแล้วราวหนึ่งในสามทาง ยังมีเวลาถอย
+		-- ถอยลงไปที่ความเร็วที่ระบบยอมให้จริง แล้วปล่อยให้หลักฐานสลายตัวเอง
+		-- ไม่ใช่การหยุด แต่เป็นการวิ่งช้าลงชั่วคราวจนกว่าจะปลอดภัย
+		if Config.DangerBrake ~= false then
+			local danger, allowed = Hub.acDanger()
+			if danger > 0.45 then
+				Hub.BrakeHits = (Hub.BrakeHits or 0) + 1
+				Hub.Phase = ("ชะลอ - ระบบเริ่มจับได้ (%s %.0f%%)")
+					:format(tostring(Hub.DangerFrom), danger * 100)
+				-- ลองปลุก ImpulseContext ใหม่ก่อน เผื่อแค่หมดอายุเฉยๆ
+				pcall(Hub.armImpulse, hrp)
+				if allowed and allowed > 0 then
+					speed = math.max(16, allowed * (tonumber(Config.SpeedSafety) or 0.9))
+				else
+					speed = math.max(16, speed * 0.35)
+				end
+			end
+		end
+
 		-- รับรองตำแหน่งใหม่ทุกเฟรมด้วย (ดู Hub.adoptBaseline)
 		--
 		-- armImpulse ยกเพดานความเร็วอย่างเดียว แต่ไม่ได้บอกว่าตำแหน่งใหม่ชอบธรรม
@@ -2901,10 +3182,23 @@ end
 --
 -- ยิงในเธรดแยกแล้วนับเวลาข้างนอก ครบเวลาแล้วไม่ตอบก็เดินหน้าต่อ
 -- เธรดที่ค้างจะค้างของมันไป แต่ไม่ลากลูปหลักไปด้วย
+-- ต้องรับค่าคืนให้ครบทุกตัว  ของเดิมทิ้งเหตุผลจากเซิร์ฟไปสองชั้น
+--
+-- ของเดิมเขียนว่า
+--     ok, res = pcall(fn, arg)     -- pcall คืน (สำเร็จ, ค่า1, ค่า2, ...)
+--     ...                          -- รับแค่ 2 ตัว = ค่า2 (เหตุผล) หายตั้งแต่ตรงนี้
+--     return res, nil              -- แล้วยังคืน nil ทับเป็นเหตุผลตายตัวอีกชั้น
+--
+-- ผลคือผู้เรียกได้เหตุผลเป็น nil เสมอ ไม่ว่าเซิร์ฟจะตอบอะไรมา
+-- วัดจริง 205 วินาที: โดนปฏิเสธ 79 ครั้ง เหตุผล "nil" ทั้ง 79 ครั้ง
+-- ซึ่งไม่ใช่เพราะเซิร์ฟเงียบ แต่เพราะเราโยนคำตอบทิ้งเอง
+--
+-- เกมส่ง (ok, reason) กลับมาจริง  ดู EggCmds.RequestCarryAreaEgg:307-313
+--     local v63, v64 = Network.Invoke(Eggs2.REQUEST_AREA_EGG_CARRY, { Uid = ..., FirstAreaSlotKey = ... })
 Hub.callTimed = function(fn, arg, secs)
-	local done, ok, res = false, false, nil
+	local done, packed = false, nil
 	task.spawn(function()
-		ok, res = pcall(fn, arg)
+		packed = table.pack(pcall(fn, arg))
 		done = true
 	end)
 	local limit = os.clock() + (tonumber(secs) or 4)
@@ -2913,8 +3207,9 @@ Hub.callTimed = function(fn, arg, secs)
 		Hub.Timeouts = (Hub.Timeouts or 0) + 1
 		return false, "เซิร์ฟไม่ตอบ"
 	end
-	if not ok then return false, tostring(res) end
-	return res, nil
+	-- packed = { pcallสำเร็จ, ค่าที่เซิร์ฟคืน1, ค่าที่เซิร์ฟคืน2, ... }
+	if not packed[1] then return false, "error: " .. tostring(packed[2]) end
+	return packed[2], packed[3]
 end
 
 local function moveWarp(target)
@@ -3391,7 +3686,7 @@ local function enterGameplayZone()
 	if hrp.Position.X > GAMEPLAY_LINE_X + 10 then return true end
 
 	-- ตั้งหลักก่อนข้ามเส้น  ต้องติดพื้นเท่านั้น ห้ามขึ้นบินฝั่งเซฟโซน
-	moveGround(Vector3.new(GAMEPLAY_LINE_X - 18, LANE_Y, LANE_Z))
+	moveGround(Vector3.new(GAMEPLAY_LINE_X - 18, LANE_Y, Hub.pickLaneZ()))
 
 	-- ข้ามเส้นด้วยก้าวเล็กๆ ไม่งั้นกระโดดข้าม trigger ไปเลย
 	-- แล้วเซิร์ฟจะตอบ "Enter the gameplay area first"
@@ -3909,7 +4204,7 @@ local function exitRoute()
 	return {
 		base,                                   -- ออกมานอกรั้วก่อน
 		Vector3.new(IDLE_X, base.Y, base.Z),    -- วิ่งตามแกน X ระดับ Z เดิม
-		Vector3.new(IDLE_X, LANE_Y, LANE_Z),    -- จบที่หน้า SAFE ZONE
+		Vector3.new(IDLE_X, LANE_Y, Hub.pickLaneZ()),    -- จบที่หน้า SAFE ZONE
 	}
 end
 
@@ -3975,7 +4270,7 @@ end
 --   วิ่งรวดเดียวจากในสนามเข้าแปลงจะสะดุด เพราะเพิ่งข้ามเส้นเปลี่ยนโซนมา
 local function enterBase()
 
-	local idleSpot = Vector3.new(IDLE_X, LANE_Y, LANE_Z)
+	local idleSpot = Vector3.new(IDLE_X, LANE_Y, Hub.pickLaneZ())
 
 	-- ขากลับเป็นระยะไกลสุดของทั้งรอบ (จากรังไข่ถึงเซฟโซนได้ถึง ~2,900 studs)
 	-- วัดแล้วเดินกลับกินเวลากว่า 11 วินาที ทั้งที่วาปทีเดียวถึง
@@ -4012,7 +4307,7 @@ local function goIdle()
 	-- ผู้ใช้สั่งไว้ตรงๆ: ให้ยืนจุดเดียวนิ่งๆ ไม่ต้องไปไหนเลย
 	-- และวัดมาแล้วว่าการเข้า-ออกแปลงคือหนึ่งในสองอาการที่เด้งไม่จบ
 	-- (512,-365 <-> 522,-483 สลับกัน 119 studs ซ้ำๆ) โดยเฉพาะแปลงที่อยู่ติดมุม
-	local spot = Vector3.new(IDLE_X, LANE_Y, LANE_Z)
+	local spot = Vector3.new(IDLE_X, LANE_Y, Hub.pickLaneZ())
 	if Config.StayCentre == true then
 		spot = Vector3.new(Hub.HOME.X, Hub.HOME.Y, Hub.HOME.Z)
 	end
@@ -4896,9 +5191,21 @@ local function warpCycle()
 		warpHome = Vector3.new(
 			tonumber(Config.WarpHomeX) or Hub.HOME.X,
 			Hub.HOME.Y,
-			tonumber(Config.WarpHomeZ) or Hub.HOME.Z)
+			tonumber(Config.WarpHomeZ) or Hub.pickLaneZ())
 		log(("จุดยืนกลาง SAFE ZONE: x%d z%d"):format(
 			math.floor(warpHome.X), math.floor(warpHome.Z)))
+	end
+
+	-- เลนขยับหนีอีเวนต์เมื่อไหร่ จุดยืนต้องตามไปด้วย
+	--
+	-- ไม่งั้นจะเกิดอาการเดียวกับที่เพิ่งวัดได้ในแกน Y เป๊ะๆ:
+	-- โค้ดคนละทางเขียนคนละพิกัด แล้วตัวละครเด้งสลับไปมาไม่หยุด
+	-- (วัดสด: Y แกว่ง 1.97 studs ระหว่าง Hub.HOME.Y กับ LANE_Y)
+	if warpHome and not tonumber(Config.WarpHomeZ) then
+		local lz = Hub.pickLaneZ()
+		if math.abs(lz - warpHome.Z) > 0.5 then
+			warpHome = Vector3.new(warpHome.X, warpHome.Y, lz)
+		end
 	end
 
 	-- ไม่เรียก tendBase() ตรงนี้
@@ -5257,7 +5564,23 @@ local function warpCycle()
 			local ok, msg = Hub.callTimed(function(a)
 				return carryF:InvokeServer(a)
 			end, { Uid = nextEgg.Uid }, tonumber(Config.CallTimeout) or 4)
-			if ok ~= true then Hub.LastCarryMsg = tostring(msg) end
+
+			-- เก็บเหตุผลทุกครั้ง ไม่ใช่เฉพาะตอนล้มเหลว
+			--
+			-- เกมส่ง (ok, reason) กลับมา และไคลเอนต์มาตรฐานก็ล็อกไว้เอง
+			-- (Game.AreaEggs:220  "Area egg carry denied for {uid}: {reason}")
+			-- นี่เป็นข้อมูลชิ้นเดียวที่บอกได้ว่าทำไมเก็บไม่ติด อย่าทิ้ง
+			--
+			-- วัดจริง 212 วินาทีที่ MoveSpeed 800: ข้ามไข่ทิ้ง 43 ฟอง
+			-- โดยที่ GlideTimeout = nil = ไปถึงไข่ครบทุกใบ ไม่มีใบไหนเดินทางพลาดเลย
+			-- แปลว่าปัญหาอยู่ที่คำตอบของเซิร์ฟล้วนๆ แต่เราไม่เคยเก็บคำตอบนั้นไว้ดู
+			Hub.LastCarryMsg = tostring(msg)
+			if ok ~= true then
+				Hub.CarryDenied = (Hub.CarryDenied or 0) + 1
+				Hub.DenySeen = Hub.DenySeen or {}
+				local k = tostring(msg)
+				Hub.DenySeen[k] = (Hub.DenySeen[k] or 0) + 1
+			end
 
 			-- เซิร์ฟล็อกไม่ให้เก็บอยู่ ~6 วินาทีแรกหลังไข่รีเซ็ต
 			--
@@ -5361,18 +5684,129 @@ local function warpCycle()
 				Hub.BoxAborts = (Hub.BoxAborts or 0) + 1
 				break
 
-			else
-				-- เซิร์ฟปฏิเสธด้วยเหตุอื่น  ลองใบเดิมซ้ำหนึ่งครั้งก่อนทิ้ง
+			elseif tostring(msg):find("unavailable") or tostring(msg):find("Unavailable") then
+				-- "Egg unavailable" = ไปถึงแล้วไข่ไม่อยู่แล้ว คนอื่นเก็บไปก่อน
 				--
-				-- ของเดิมไม่มีสาขานี้ พอไม่ตรงเงื่อนไขไหนเลยก็ปล่อยให้ qi เลื่อนไปใบถัดไป
-				-- ใบแพงสุดจึงหลุดมือตั้งแต่ครั้งแรกที่เซิร์ฟตอบอะไรที่เราไม่รู้จัก
-				-- ใช้ตัวนับเดียวกับตอนวาปพลาด ใบละครั้งเดียวเหมือนกัน
+				-- นี่คือเหตุผลอันดับหนึ่งที่วัดได้จริง (20 ครั้งใน 75 วินาทีที่ 800 st/s)
+				-- และไม่เกี่ยวกับความเร็วเลย  วัดครบ 4 ระดับแล้ว:
+				--     800 -> unavailable 20 | 400 -> 6 | 200 -> 0 | 100 -> 1
+				--     "Movement is not currently trusted" = 0 ทุกระดับ
+				--
+				-- ต้นเหตุคือคิว: สร้างครั้งเดียว 24 ใบ แล้วไล่เก็บทีละใบ
+				-- ระยะทางไปสนามราว 3,400 studs กว่าจะถึงใบท้ายๆ ข้อมูลเก่าไปนานแล้ว
+				-- ไล่ต่อไปใบถัดไปในคิวก็ไม่ช่วย เพราะใบนั้นก็เก่าพอกัน
+				--
+				-- ตอนนี้เราอยู่ "ในสนาม" แล้ว ไข่ใบอื่นอยู่ใกล้แค่ไม่กี่ร้อย studs
+				-- อ่านของสดแล้วคว้าใบที่ใกล้ตัวที่สุดเลย ถูกกว่ากลับไปตั้งต้นใหม่มาก
+				local _, hNow = char()
+				local here = hNow and hNow.Position
+				-- กฎเหล็ก: เก็บใบที่แพงที่สุดก่อนเสมอ  ระยะทางเป็นแค่ตัวตัดสินเมื่อราคาเท่ากัน
+				--
+				-- รอบแรกผมเขียนตรงนี้ให้เลือกจากระยะทางล้วนๆ ซึ่งผิดกฎข้อนี้
+				-- พอใบแพงหลุดมือ มันจะไปคว้าใบถูกที่อยู่ใกล้แทน แล้วใบแพงก็โดนคนอื่นเก็บไป
+				-- (เป็นอาการเดิมที่ลูกค้าเคยรายงานว่า "กว่ามันจะวนมาเก็บใบแพงสุด คนอื่นแย่งไปแล้ว")
+				--
+				-- rankedEggs เรียงจากแพงไปถูกมาให้แล้ว จึงไล่ตามลำดับนั้นตรงๆ
+				-- แล้วใช้ระยะทางตัดสินเฉพาะกลุ่มที่ราคาห่างกันไม่เกิน 1% ซึ่งถือว่าเท่ากัน
+				local fresh = here and rankedEggs(Config.Area) or nil
+				local bestRec, bestD, topRate = nil, math.huge, nil
+				if fresh then
+					for _, item in ipairs(fresh) do
+						local rec = item.rec
+						local rp = rec and rec.BottomCFrame and rec.BottomCFrame.Position
+						-- ห้ามเลือกใบที่เพิ่งลองแล้วไม่ผ่านซ้ำ
+						if rp and (eggRetry[rec.Uid] or 0) == 0 then
+							local rate = tonumber(item.rate) or 0
+							if topRate == nil then topRate = rate end
+							-- ต่ำกว่าใบแพงสุดเกิน 1% = ไม่พิจารณาแล้ว หยุดไล่ได้เลย
+							-- (รายการเรียงจากมากไปน้อย ที่เหลือยิ่งถูกลง)
+							if rate < topRate * 0.99 then break end
+							local d = (rp - here).Magnitude
+							if d < bestD then bestD, bestRec = d, rec end
+						end
+					end
+				end
+				if bestRec then
+					Hub.Retarget = (Hub.Retarget or 0) + 1
+					-- ยัดใบใหม่ลงคิวตรงตำแหน่งถัดไป แล้วให้ลูปเดินต่อตามปกติ
+					queue[qi + 1] = bestRec
+				else
+					Hub.SkipEgg = (Hub.SkipEgg or 0) + 1
+				end
+
+			elseif tostring(msg):find("trusted") then
+				-- "Movement is not currently trusted" = เซิร์ฟไม่เชื่อถือการเคลื่อนที่
+				--
+				-- เหตุผลอันดับหนึ่งที่วัดได้จริง (23 จาก 28 ครั้ง)
+				-- เป็นการตรวจฝั่งเซิร์ฟ แยกจากระบบฝั่งไคลเอนต์คนละตัวกัน
+				-- ฝั่งไคลเอนต์เรากลบมิดแล้ว (danger 0.00 · ctx Server physics envelope)
+				-- แต่เซิร์ฟจำได้เองว่าเราเพิ่งวิ่งมาผิดปกติ จึงไม่ให้หยิบ
+				--
+				-- ตรงนี้ทำสองอย่างพร้อมกัน: แก้ปัญหา และวัดว่าต้องนิ่งนานแค่ไหน
+				-- หยุดสนิทจริงๆ (ล้างความเร็ว ปลดตัวตรึง) แล้วรอเป็นขั้นๆ
+				-- ขั้นไหนผ่านให้จำไว้ที่ Hub.TrustWaits รอบหน้าจะได้เริ่มจากเลขนั้นเลย
+				local waits = { 0.25, 0.6, 1.2, 2.0 }
+				local n = (Hub.TrustTry or 0) + 1
+				Hub.TrustTry = n
+				local w = waits[math.min(n, #waits)]
+
+				pcall(Hub.pinRelease)
+				local _, hh = char()
+				if hh then
+					pcall(function() hh.AssemblyLinearVelocity = Vector3.zero end)
+					pcall(function() hh.AssemblyAngularVelocity = Vector3.zero end)
+				end
+				Hub.Phase = ("รอเซิร์ฟเชื่อถือ %.2f วิ"):format(w)
+				task.wait(w)
+
+				local ok2, msg2 = Hub.callTimed(function(a)
+					return carryF:InvokeServer(a)
+				end, { Uid = nextEgg.Uid }, tonumber(Config.CallTimeout) or 4)
+				Hub.LastCarryMsg = tostring(msg2)
+				if ok2 == true then
+					-- จำไว้ว่าเลขไหนใช้ได้ เก็บสถิติไว้ปรับค่าเริ่มต้นทีหลัง
+					Hub.TrustWaits = Hub.TrustWaits or {}
+					local k = ("%.2f"):format(w)
+					Hub.TrustWaits[k] = (Hub.TrustWaits[k] or 0) + 1
+					Hub.TrustOK = (Hub.TrustOK or 0) + 1
+					got = got + 1
+					Hub.TrustTry = 0
+				else
+					Hub.TrustFail = (Hub.TrustFail or 0) + 1
+					Hub.DenySeen = Hub.DenySeen or {}
+					local k2 = "หลังรอ: " .. tostring(msg2)
+					Hub.DenySeen[k2] = (Hub.DenySeen[k2] or 0) + 1
+					eggRetry[nextEgg.Uid] = (eggRetry[nextEgg.Uid] or 0) + 1
+					if eggRetry[nextEgg.Uid] <= 3 then qi = qi - 1
+					else Hub.SkipEgg = (Hub.SkipEgg or 0) + 1 ; Hub.TrustTry = 0 end
+				end
+
+			else
+				-- เซิร์ฟปฏิเสธด้วยเหตุอื่น  ลองซ้ำหลายครั้งก่อนยอมทิ้ง
+				--
+				-- วัดจริง 2026-08-22 ที่ MoveSpeed 800 เป็นเวลา 212 วินาที:
+				--     เก็บได้ 1 · พลาด 1 · ข้ามทิ้ง 43 · GlideTimeout = nil
+				-- GlideTimeout เป็น nil แปลว่าการเดินทาง "ไม่เคยล้มเหลวเลยสักครั้ง"
+				-- คือไปถึงไข่ครบทุกใบ แต่คำสั่งเก็บโดนปฏิเสธ แล้วโดนทิ้งหลังลองแค่ 2 ครั้ง
+				--
+				-- ลองแค่ 2 ครั้งน้อยเกินไป  เหตุปฏิเสธส่วนใหญ่เป็นเรื่องชั่วคราว
+				-- (เซิร์ฟยังไม่รับตำแหน่งใหม่ · ใบนั้นเพิ่งโดนคนอื่นจอง · คูลดาวน์)
+				-- ทิ้งทันทีคือเสียไข่ฟรี แล้วคิวก็เลื่อนไปใบที่ถูกกว่าเรื่อยๆ
+				--
+				-- ผู้ใช้ยืนยันว่ารุ่นก่อนหน้า "ถึงแล้วเก็บติดเลย กลับทันที ฝากติดด้วย"
+				-- = ตรรกะข้ามไข่นี่แหละคือตัวที่ทำให้แย่ลง ไม่ใช่การเดินทาง
+				local MAX_TRY = 4
 				eggRetry[nextEgg.Uid] = (eggRetry[nextEgg.Uid] or 0) + 1
-				if eggRetry[nextEgg.Uid] <= 1 then
-					task.wait(0.15)
+				if eggRetry[nextEgg.Uid] <= MAX_TRY then
+					task.wait(0.12)
 					qi = qi - 1
 				else
 					Hub.SkipEgg = (Hub.SkipEgg or 0) + 1
+					-- เก็บเหตุผลที่ทำให้ยอมแพ้ไว้ดู  ไม่งั้นไล่ต่อไม่ได้เลย
+					Hub.SkipReason = tostring(Hub.LastCarryMsg)
+					Hub.SkipSeen = Hub.SkipSeen or {}
+					local k = tostring(Hub.LastCarryMsg)
+					Hub.SkipSeen[k] = (Hub.SkipSeen[k] or 0) + 1
 				end
 			end
 		end
@@ -5609,7 +6043,7 @@ local function cycle()
 	log(("เป้าหมาย: %s [%s] $%s/s"):format(
 		scout.AssetCategory, scout.AreaId, comma(scoutRate)))
 
-	move(Vector3.new(scout.BottomCFrame.Position.X - 40, LANE_Y, LANE_Z))
+	move(Vector3.new(scout.BottomCFrame.Position.X - 40, LANE_Y, Hub.pickLaneZ()))
 
 	-- อุ่นแคชตำแหน่งแปลงไว้ก่อนลงมือเก็บ
 	--
@@ -5646,7 +6080,7 @@ local function cycle()
 	log(("เก็บได้: %s ($%s/s)"):format(got.AssetCategory or got.Uid, comma(eggRate(got))))
 
 	Hub.Phase = "พากลับฐาน"
-	move(Vector3.new(got.BottomCFrame.Position.X, LANE_Y, LANE_Z))   -- ออกจากรังไข่มาเข้าเลนก่อน
+	move(Vector3.new(got.BottomCFrame.Position.X, LANE_Y, Hub.pickLaneZ()))   -- ออกจากรังไข่มาเข้าเลนก่อน
 
 	-- ห้ามแวะพักที่ x = GAMEPLAY_LINE_X + 10 เด็ดขาด
 	--
@@ -6337,16 +6771,13 @@ local function buildUI(A)
 		return n > 0 and ("ตั้งไป " .. n .. " อย่าง") or "ตั้งไว้ครบแล้ว"
 	end)
 	A.toggle("Anti-AFK", "", Config.AntiAFK, function(v) Config.AntiAFK = v end)
-	A.toggle("บันทึกค่าอัตโนมัติ", "ปรับอะไรแล้วเซฟให้เลย", Config.AutoSaveConfig, function(v)
-		Config.AutoSaveConfig = v
-		if v then saveConfig() end
-	end)
-	A.button("บันทึกค่าตอนนี้", "เขียนลงไฟล์ " .. CONFIG_FILE, "บันทึก", function()
-		return saveConfig() and "บันทึกแล้ว" or "executor ไม่รองรับ writefile"
-	end)
-	A.button("สร้างไฟล์คอนฟิกใหม่", "เขียนทับ " .. USER_CONFIG_FILE .. " ด้วยค่าเริ่มต้น", "สร้าง", function()
-		return writeUserConfig() and ("เขียน " .. USER_CONFIG_FILE .. " แล้ว") or "executor ไม่รองรับ writefile"
-	end)
+	-- ปุ่มบันทึกค่าทั้งสามตัวถูกถอดออก อย่าใส่กลับ
+	--
+	-- สคริปต์ไม่จำคอนฟิกลงดิสก์แล้ว ค่าที่ใช้มาจาก loader อย่างเดียว
+	-- ปุ่มที่เขียนไฟล์คือทางเดียวที่จะทำให้ค่าเก่าค้างในเครื่องลูกค้าได้อีก
+	-- ซึ่งเป็นต้นเหตุที่ "รันบิลด์เดียวกันแต่บางคนโดนเตะ บางคนไม่โดน"
+	--
+	-- อยากเปลี่ยนค่าถาวร ให้แก้ที่ loader = เห็นสิ่งที่รันจริงเสมอ
 	A.button("รีเซ็ตกลับค่าเริ่มต้น", "ต้องรันสคริปต์ใหม่เพื่อให้ UI อัปเดตตาม", "รีเซ็ต", function()
 		resetConfig()
 		return "รีเซ็ตแล้ว รันใหม่อีกที"
@@ -6593,16 +7024,8 @@ task.spawn(function()
 	end
 end)
 
--- ลูปเซฟค่า (เซฟเมื่อมีการเปลี่ยนแปลงเท่านั้น ไม่เขียนไฟล์รัวๆ)
-task.spawn(function()
-	while alive() do
-		if configDirty and Config.AutoSaveConfig then
-			configDirty = false
-			pcall(saveConfig)
-		end
-		task.wait(3)
-	end
-end)
+-- ลูปเซฟค่าถูกถอดออก  สคริปต์ไม่เขียนคอนฟิกลงดิสก์แล้ว
+-- (markDirty ยังมีอยู่และ UI ยังเรียกได้ แต่ไม่มีใครอ่านค่านั้นต่อ = ไม่มีผล)
 
 -- Anti-AFK
 --
@@ -6744,8 +7167,22 @@ if Config.Trace ~= false and type(writefile) == "function" then
 						-- pinsk ตัวตรึงถูกข้ามกี่ครั้ง  ไม่ใช่ 0 = PinHold ปิดอยู่จริง
 						-- tries acState สแกนพลาดอยู่กี่รอบ  ค้างที่ 1 = ตัวนับพัง วนสแกนไม่หยุด
 						-- arm   ปลดเพดานสำเร็จไปกี่ครั้ง
-						("place %s|vio %s|net %s|gui %s|fell %s|pinsk %s|tries %s|arm %s|%s"):format(
+						-- ev    อีเวนต์ที่กำลังทำงาน (- = ไม่มี)  ของบนแมพเปลี่ยนตามตัวนี้
+						-- lane  เลนที่ใช้อยู่ / ระยะห่างจากของที่ขวางใกล้สุด
+						-- tread ติดสถานะลูกวิ่งอยู่ไหม / ปลดสำเร็จไปกี่ครั้ง
+						-- dgr   หลักฐานที่ระบบกันโกงสะสมไว้ สูงสุดที่เคยแตะ / ชะลอไปกี่ครั้ง
+						--       0 ตลอด = ImpulseContext ปลอมยังติดอยู่  ขึ้นเมื่อไหร่คือมันหลุด
+						-- allow ความเร็วที่ระบบยอมให้ไอดีนี้จริงๆ ตอนนั้น
+						("place %s|ev %s|lane %s/%s|tread %s/%s|dgr %.2f/%s|allow %s|vio %s|net %s|gui %s|fell %s|pinsk %s|tries %s|arm %s|%s"):format(
 							tostring(Hub.PlaceCalls or 0),
+							(Hub.EventSig ~= nil and Hub.EventSig ~= "" and Hub.EventSig) or "-",
+							tostring(math.floor(Hub.LaneZ or 0)),
+							tostring(math.floor(Hub.LaneClear or -1)),
+							tostring(Hub.TreadmillActive == true),
+							tostring(Hub.TreadFixed or 0),
+							tonumber(Hub.DangerPeak) or 0,
+							tostring(Hub.BrakeHits or 0),
+							tostring(math.floor(Hub.AllowedSpeed or -1)),
 							tostring(Hub.ViolationFires or 0),
 							tostring(Hub.NetHooked == true),
 							(Hub.OverlayGui and Hub.OverlayGui.Parent
@@ -6816,6 +7253,10 @@ end
 --    ซึ่งคือครั้งที่สำคัญที่สุด เพราะลูกค้าหลายคนโดนเตะภายในไม่กี่วินาทีแรก
 pcall(Hub.watchNetwork)
 
+-- ต่อสัญญาณลูกวิ่งทันที ห้ามรอ StartupGrace
+-- ถ้าต่อช้ากว่าครั้งแรกที่เกมยิงมา เราจะพลาดครั้งนั้นแล้วติดสถานะค้างโดยไม่รู้ตัว
+pcall(Hub.watchTreadmill)
+
 task.spawn(function()
 	waitSettled(tonumber(Config.StartupGrace) or 15)
 
@@ -6852,14 +7293,15 @@ log("พร้อมใช้งาน — Hamster Diwa")
 log("ทดสอบแล้ว: Hamster ของดีบอกต่อ")
 
 -- บอกให้ชัดว่าค่าที่ใช้อยู่มาจากไหน เวลาแก้แล้วไม่เปลี่ยนจะได้รู้ว่าโดนตัวไหนทับ
-local configSource = "ค่าเริ่มต้น"
-if configLoaded then configSource = CONFIG_FILE end
-if userConfigLoaded then configSource = USER_CONFIG_FILE end
-if globalConfigLoaded then configSource = "_G.HamsterConfig" end
+-- ตอนนี้เหลือได้แค่สองอย่างเท่านั้น ไม่มีชั้นที่มาจากไฟล์บนเครื่องแล้ว
+local configSource = globalConfigLoaded and "_G.HamsterConfig" or "ค่าเริ่มต้น"
 
 log("ค่าที่ใช้มาจาก: " .. configSource)
-if not userConfigLoaded and not globalConfigLoaded then
-	log("สร้างไฟล์ " .. USER_CONFIG_FILE .. " ให้แล้ว แก้แล้วรันใหม่")
+if purged > 0 then
+	log(("ลบไฟล์คอนฟิกเก่าที่ค้างในเครื่องทิ้งแล้ว %d ไฟล์"):format(purged))
+end
+if not globalConfigLoaded then
+	log("ไม่พบ _G.HamsterConfig - กำลังใช้ค่าเริ่มต้นล้วน ตรวจว่ารันผ่าน loader หรือยัง")
 end
 log(("โหมด %s · %d studs/s · ด่าน %s"):format(
 	Config.MoveMode, math.floor(Config.Step / Config.Gap), Config.Area))
