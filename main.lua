@@ -92,7 +92,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "pricefirst-320"
+Hub.Build = "toolcheck-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -592,6 +592,21 @@ local Config = {
 	-- เก็บโค้ดไว้เผื่อวันหลังอยากไล่ต่อ แต่ต้องตั้ง NetWatch = true เองเท่านั้น
 	NetWatch = false,
 	MuteViolation = false,
+
+	-- ประกาศความเร็วจริงขึ้นเซิร์ฟหรือไม่
+	--
+	-- hrp.AssemblyLinearVelocity เป็น property ที่ replicate ขึ้นเซิร์ฟเวอร์
+	-- Hub.glide เขียนค่าความเร็วจริงลงไปทุกเฟรม = บอกเซิร์ฟเองว่ากำลังโกงอยู่
+	-- false = ประกาศเท่าที่กฎยอมให้ (WalkSpeed*1.1+8) แทนความเร็วจริง
+	--
+	-- ต้องอยู่ในตารางนี้ ไม่งั้น mergeConfig บรรทัด 631 ทิ้งค่าจาก loader ทั้งหมด
+	-- (พลาดมาแล้วกับ NetWatch/MuteViolation ครั้งหนึ่ง)
+	-- false = ไม่ประกาศความเร็วโกงขึ้นเซิร์ฟ
+	-- วัดสด 150 วินาทีที่ 700 st/s: "Movement is not currently trusted" 37 -> 2 ครั้ง
+	DeclareVelocity = false,
+
+	-- ใช้ปุ่ม ProximityPrompt ของเกมแทนการยิงรีโมทตรงๆ (ดู Hub.grabPrompt)
+	UsePrompt = true,
 }
 Hub.Config = Config
 
@@ -2839,6 +2854,77 @@ Hub.acDanger = function()
 	return worst, Hub.AllowedSpeed
 end
 
+--==================================================================
+-- เก็บไข่ด้วยปุ่มของเกมเอง แทนการยิงรีโมทตรงๆ
+--
+-- วัดจากเกมสด: ไข่ทุกฟองมีปุ่มอยู่แล้ว
+--     Workspace.SmartPromptPart (50 อัน) > CarryAreaEgg (ProximityPrompt)
+--     ObjectText "Egg" · ActionText "Steal" · MaxActivationDistance 8
+--     HoldDuration 1.20 · RequiresLineOfSight false · KeyboardKeyCode E
+--
+-- ทำไมต้องเปลี่ยนมาทางนี้:
+-- ทั้งโค้ดรุ่นเก่าและรุ่นนี้ยิง Eggs: RequestAreaEggCarry ตรงๆ ไม่เคยใช้ปุ่มเลย
+-- ซึ่งเป็นเส้นทางที่เซิร์ฟตรวจเข้มกว่า พอวิ่งเร็วก็ตอบ
+--     "Movement is not currently trusted"
+-- วัดแล้ว 700 st/s -> ปฏิเสธ 22 ครั้ง เก็บได้ 0 (ลอง ExpireOnArrive แล้วก็ไม่ช่วย)
+--
+-- ส่วนปุ่มเป็นกลไกของ Roblox เอง เซิร์ฟตรวจระยะและตัวปุ่มให้ ไม่ได้ตรวจแบบเดียวกัน
+-- fireproximityprompt ยิงผ่านได้ทันทีโดยไม่ต้องกดค้างครบ 1.2 วินาที
+--
+-- ต้องมี fireproximityprompt  ถ้าตัวรันไม่มีก็ถอยไปใช้รีโมทเหมือนเดิม
+Hub.grabPrompt = function(maxDist)
+	if type(fireproximityprompt) ~= "function" then
+		Hub.PromptSkipped = "ตัวรันไม่มี fireproximityprompt"
+		return false
+	end
+	local c = LocalPlayer.Character
+	local h = c and c:FindFirstChild("HumanoidRootPart")
+	if not h then return false end
+
+	-- ไล่เฉพาะลูกตรงของ workspace ที่ชื่อ SmartPromptPart  ไม่ได้ไล่ทั้งฉาก
+	local best, bd = nil, math.huge
+	for _, d in ipairs(workspace:GetChildren()) do
+		if d.Name == "SmartPromptPart" and d:IsA("BasePart") then
+			local pr = d:FindFirstChild("CarryAreaEgg")
+			if pr and pr.Enabled then
+				local dist = (d.Position - h.Position).Magnitude
+				if dist < bd then bd, best = dist, pr end
+			end
+		end
+	end
+	if not best then return false end
+
+	local lim = tonumber(maxDist) or best.MaxActivationDistance or 8
+	if bd > lim then
+		Hub.PromptTooFar = (Hub.PromptTooFar or 0) + 1
+		Hub.PromptDist = bd
+		return false
+	end
+
+	Hub.PromptFired = (Hub.PromptFired or 0) + 1
+	local ok = pcall(fireproximityprompt, best)
+	return ok
+end
+
+-- ถือไข่อยู่หรือยัง  ใช้เช็คว่าการกดปุ่มสำเร็จจริงไหม
+-- ถือไข่อยู่หรือยัง
+--
+-- เช็คจาก Tool ในตัวละครตรงๆ  ไข่ที่แบกอยู่เป็น Tool จริง
+-- (probe สด: Character มี Tool ชื่อ "Cosmic Gecko Egg" ตอนกำลังแบก)
+--
+-- ห้ามใช้ EggCmds.GetAreaEggCarryState  ฟังก์ชันนั้นไม่มีอยู่จริง
+-- EggCmds มีแค่ AreaEggCarryStateChanged (สัญญาณ) กับ RequestCarryAreaEgg
+-- ของเดิมเรียกตัวที่ไม่มี เลยคืน nil ตลอด แปลว่า "ไม่ได้ถือ" ทุกครั้ง
+-- ผลคือปุ่มเก็บไข่สำเร็จแต่เราไม่รู้ตัว แล้วยิงรีโมทซ้ำจนได้ "Already carrying an egg"
+-- แล้วนับเป็นล้มเหลว  ไข่ที่ถืออยู่จึงไม่เคยถูกพาไปฝาก
+Hub.isCarrying = function()
+	local c = LocalPlayer.Character
+	if not c then return false end
+	local t = c:FindFirstChildOfClass("Tool")
+	if t then return true, t.Name end
+	return false
+end
+
 Hub.armImpulse = function(hrp)
 	if Config.ImpulseBypass == false then return false end
 	local st = Hub.acState()
@@ -3146,7 +3232,25 @@ Hub.glide = function(hrp, hum, dest)
 		-- ประกาศ stepDist/dt = ค่าที่ตรงกับการขยับจริงในเฟรมนั้นพอดี
 		-- เพดานกลายเป็น 700*1.5+20 = 1070 ซึ่งสูงกว่าที่เราวิ่ง คะแนนจึงไม่ขึ้นเลย
 		local realSpd = (dt > 0) and (stepDist / dt) or speed
-		hrp.AssemblyLinearVelocity = dir * realSpd
+
+		-- ค่านี้ replicate ขึ้นเซิร์ฟ = เราบอกเซิร์ฟเองว่ากำลังวิ่งเร็วแค่ไหน
+		--
+		-- ที่เขียนไว้ข้างบนเป็นเหตุผลของระบบกันโกง "ฝั่งไคลเอนต์" ซึ่งถูกต้องของมัน
+		-- แต่ฝั่งเซิร์ฟเป็นคนละเรื่อง: เซิร์ฟดูค่านี้แล้วตัดสินว่าเชื่อถือการเคลื่อนที่ไหม
+		-- ถ้าไม่เชื่อถือ มันจะปฏิเสธคำสั่งหยิบไข่ด้วย "Movement is not currently trusted"
+		-- ไม่ว่าจะขอผ่านรีโมทหรือผ่านปุ่ม ProximityPrompt ก็โดนเหมือนกัน (วัดแล้วทั้งสองทาง)
+		--
+		-- DeclareVelocity = false จึงประกาศเท่าที่กฎยอมให้ แทนที่จะประกาศความเร็วโกงจริงๆ
+		if Config.DeclareVelocity == false then
+			local cap = tonumber(Hub.AllowedSpeed)
+			if not cap or cap <= 0 then
+				local hh = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+				cap = (hh and hh.WalkSpeed or 16) * 1.1 + 8
+			end
+			hrp.AssemblyLinearVelocity = dir * math.min(realSpd, cap)
+		else
+			hrp.AssemblyLinearVelocity = dir * realSpd
+		end
 
 		-- ตอนกล่องขาวขึ้น ต้องตรึง "ระหว่างทาง" ไม่ใช่ตรึงตอนถึงแล้ว
 		--
@@ -5561,9 +5665,53 @@ local function warpCycle()
 			if fieldIsFresh() or Hub.BoxUp then Hub.pinAt(eggPos, 2) end
 			-- โดนดีดกลับระหว่างทางไหม ถ้าใช่วาปกลับไปก่อนค่อยยิง
 			Hub.atEggOrRewarp(eggPos, function() return move(eggPos) end)
-			local ok, msg = Hub.callTimed(function(a)
-				return carryF:InvokeServer(a)
-			end, { Uid = nextEgg.Uid }, tonumber(Config.CallTimeout) or 4)
+
+			-- ลองกดปุ่มของเกมก่อนเสมอ (ดู Hub.grabPrompt)
+			--
+			-- ปุ่มเป็นกลไกของ Roblox เอง เซิร์ฟตรวจคนละชุดกับการยิงรีโมทตรงๆ
+			-- ซึ่งเป็นทางเดียวที่ยังไม่เคยลอง และเป็นทางที่ผู้เล่นจริงใช้
+			-- fireproximityprompt ยิงผ่านทันที ไม่ต้องกดค้างครบ 1.2 วินาที
+			local ok, msg
+			if Config.UsePrompt ~= false and Hub.grabPrompt() then
+				-- ต้องรอให้อีเวนต์สถานะถือไข่วิ่งมาถึงก่อน  ห้ามเช็คแค่เฟรมเดียว
+				--
+				-- เคยเช็คเฟรมเดียวแล้วพลาด: ปุ่มเก็บไข่ได้จริง แต่ Eggs: AreaEggCarryState
+				-- ยังมาไม่ถึง เราเลยคิดว่าไม่ติด แล้วยิงรีโมทซ้ำ
+				-- เซิร์ฟตอบ "Already carrying an egg" แล้วโค้ดนับเป็นล้มเหลว ทั้งที่ได้ไข่แล้ว
+				-- ผลคือ got ไม่ขยับ คิวโดนทิ้งทั้งชุด และไข่ที่ถืออยู่ไม่ได้ถูกเอาไปฝาก
+				-- (วัดสด 150 วินาทีที่ 700 st/s: ปุ่มยิง 20 "ไม่ติด" 20 แต่ได้ 19x ข้อความนั้น)
+				--
+				-- รอแบบมีทางออกเร็ว ได้เมื่อไหร่ออกทันที ไม่ใช่หน่วงตายตัว
+				local t0 = os.clock()
+				repeat
+					task.wait()
+					if Hub.isCarrying() then ok, msg = true, "prompt" break end
+				until os.clock() - t0 > 0.25
+				if ok then
+					Hub.PromptOK = (Hub.PromptOK or 0) + 1
+				else
+					Hub.PromptMiss = (Hub.PromptMiss or 0) + 1
+				end
+			end
+
+			-- ปุ่มไม่ผ่านค่อยถอยไปทางเดิม
+			if ok ~= true then
+				ok, msg = Hub.callTimed(function(a)
+					return carryF:InvokeServer(a)
+				end, { Uid = nextEgg.Uid }, tonumber(Config.CallTimeout) or 4)
+
+				-- "Already carrying an egg" ไม่ใช่ความล้มเหลว  แปลว่าเราได้ไข่มาแล้ว
+				-- เกิดตอนปุ่มเก็บสำเร็จแต่เราเช็คไม่ทัน แล้วยิงรีโมทซ้ำ
+				-- นับเป็นล้มเหลวเมื่อไหร่ = ไข่ที่ถืออยู่ไม่ถูกเอาไปฝาก (อาการ "กลับมาแล้วไม่ save")
+				if ok ~= true and tostring(msg):find("Already carrying") then
+					if Hub.isCarrying() then
+						ok, msg = true, "prompt (ยืนยันย้อนหลัง)"
+						Hub.PromptLate = (Hub.PromptLate or 0) + 1
+						Hub.PromptOK = (Hub.PromptOK or 0) + 1
+						Hub.PromptMiss = math.max(0, (Hub.PromptMiss or 1) - 1)
+					end
+				end
+			end
 
 			-- เก็บเหตุผลทุกครั้ง ไม่ใช่เฉพาะตอนล้มเหลว
 			--
