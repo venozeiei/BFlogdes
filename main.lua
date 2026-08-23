@@ -92,7 +92,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "toolcheck-700"
+Hub.Build = "approach-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -607,6 +607,13 @@ local Config = {
 
 	-- ใช้ปุ่ม ProximityPrompt ของเกมแทนการยิงรีโมทตรงๆ (ดู Hub.grabPrompt)
 	UsePrompt = true,
+
+	-- ชะลอกี่ studs สุดท้ายก่อนถึงเป้า  0 = ไม่ชะลอ (พฤติกรรมเดิม)
+	-- มีไว้ให้วิ่งเร็วตลอดทางได้ แล้วยังหยิบไข่ติด
+	ApproachDist = 40,
+
+	-- ความเร็วช่วงชะลอ  0 = คิดเองจากเพดานที่กฎยอมให้ (WalkSpeed*1.1+8)
+	ApproachSpeed = 0,
 }
 Hub.Config = Config
 
@@ -3189,7 +3196,42 @@ Hub.glide = function(hrp, hum, dest)
 
 		-- ห้ามวิ่งเลยเป้า  ที่ 1200 st/s เคยพุ่งข้ามแล้วแกว่งไปมาจนไปไม่ถึง
 		-- math.min กับระยะที่เหลือกันไว้อยู่แล้ว แต่หนีบ dt ด้วยกันเฟรมกระตุกยาว
-		local capPerFrame = speed * math.min(dt, 0.05)
+		-- ชะลอช่วงสุดท้ายก่อนถึงเป้า เพื่อให้เซิร์ฟยอมให้หยิบไข่
+		--
+		-- เซิร์ฟมีด่านของตัวเองแยกจากระบบกันโกงฝั่งไคลเอนต์ ถ้าไม่ผ่านจะตอบ
+		--     "Movement is not currently trusted"
+		-- แล้วปฏิเสธคำสั่งหยิบไข่ ไม่ว่าจะขอผ่านรีโมทหรือผ่านปุ่ม (วัดแล้วทั้งสองทาง)
+		--
+		-- ที่วัดได้: การยืนนิ่งรอ 0.25-2.0 วินาทีหลังถึงที่หมาย ไม่ช่วยเลยสักครั้ง (0/24)
+		-- แปลว่าเซิร์ฟไม่ได้ดู "ตอนนี้หยุดหรือยัง" แต่ดูตัวอย่างการเคลื่อนที่ล่าสุด
+		-- การหยุดนิ่งไม่ได้สร้างตัวอย่างใหม่ให้มันเลย เพราะเราไม่ได้ขยับ
+		--
+		-- จึงต้อง "เคลื่อนที่แบบถูกกฎ" ในช่วงท้าย ไม่ใช่หยุดเฉยๆ
+		-- วิ่งเร็วตลอดทาง แล้วชะลอลงมาที่ความเร็วที่กฎยอมรับในระยะ ApproachDist สุดท้าย
+		-- เซิร์ฟจะได้ตัวอย่างที่สะอาดต่อกันหลายเฟรมก่อนเราขอหยิบ
+		--
+		-- ราคาที่จ่าย: ระยะ 40 studs สุดท้ายวิ่งที่ ~28 st/s = 1.4 วินาทีต่อเที่ยว
+		-- ซึ่งถูกกว่าการเสียทั้งเที่ยวเพราะหยิบไม่ติดมาก
+		local useSpeed = speed
+		local appDist = tonumber(Config.ApproachDist) or 0
+		if appDist > 0 and m <= appDist then
+			local legal = tonumber(Config.ApproachSpeed) or 0
+			if legal <= 0 then
+				-- 0 = คิดให้เอง จากเพดานที่กฎยอมให้ของไอดีนี้
+				legal = tonumber(Hub.AllowedSpeed) or 0
+				if legal <= 0 then
+					local hh = LocalPlayer.Character
+						and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+					legal = (hh and hh.WalkSpeed or 16) * 1.1 + 8
+				end
+			end
+			useSpeed = math.min(speed, math.max(12, legal))
+			Hub.Approaching = true
+		else
+			Hub.Approaching = false
+		end
+
+		local capPerFrame = useSpeed * math.min(dt, 0.05)
 		local stepDist = math.min(capPerFrame, m)
 		local nextPos = hrp.Position + dir * stepDist
 
@@ -5348,7 +5390,26 @@ local function warpCycle()
 		-- ตัวยาว (secondsToReset) ใช้เป็นตัวสำรอง เผื่อตัวสั้นยังไม่โผล่
 		local nleft = Hub.nightIn()
 		local left = nleft or secondsToReset()
-		if (left ~= nil and left <= holdSecs) or Hub.BoxUp or isResetting() then
+
+		-- ธง GUI เชื่อได้เฉพาะตอนเวลาบอกว่าใกล้จริงเท่านั้น
+		--
+		-- Hub.BoxUp อ่านมาจาก EndingSoon.Visible ซึ่งเป็น Frame ที่เปิดค้างไว้ตลอด
+		-- (probe สด: EndingSoon(Frame) vis=true ทั้งที่เหลือเวลาอีกเป็นนาที)
+		-- ของเดิมเขียน `or Hub.BoxUp` เฉยๆ = พอธงค้าง มันหยุดฟาร์มทันที
+		-- ไม่ว่าจะเหลือเวลาอีกกี่นาที แล้วยืนนิ่งรอรีเซ็ตอย่างเดียวทั้งรอบ
+		--
+		-- ผู้ใช้เจอตรงๆ: จอขึ้น "ใกล้รีเซ็ต - ยืนรอที่จุดกลาง · รีเซ็ตอีก 139s"
+		-- พร้อมสถิติ ได้ 0 ฟัก 0 ขาย 0 อัปฐาน 0 คือไม่ได้ทำอะไรเลยทั้งรอบ
+		--
+		-- สคริปต์อ่านเวลาได้ถูกอยู่แล้ว (เลข 139 บนจอมาจาก Hub.nightIn เอง)
+		-- จึงให้เวลาเป็นตัวคุม แล้วใช้ธง GUI เป็นตัวช่วยเฉพาะในหน้าต่างรีเซ็ตจริง
+		-- (เผื่อช่วงที่ตัวนับเด้งกลับเป็น ~290 ก่อนไข่สลับชุดเสร็จ)
+		local GUI_TRUST_WINDOW = 45
+		local timeNear = (left ~= nil and left <= holdSecs)
+		local guiNear = (Hub.BoxUp or isResetting())
+			and (left == nil or left <= GUI_TRUST_WINDOW)
+
+		if timeNear or guiNear then
 			Hub.Phase = "ใกล้รีเซ็ต - ยืนรอที่จุดกลาง"
 			move(warpHome)
 
