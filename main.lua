@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "chores2-700"
+Hub.Build = "hatchride-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -6151,8 +6151,36 @@ Hub.rideTreadmill = function()
 		-- มาตัดสินว่าหลุดจึงผิดเสมอ  ทางที่ถูกคือไม่ตัดสินอะไรเลย
 		--
 		-- ออกทางเดียวคือถึงเวลารีเซ็ต ซึ่งเช็คที่หัวลูปแล้ว
-		Hub.Phase = ("ยืนวิ่งสะสม speed - รีเซ็ตอีก %s วิ")
-			:format(left and math.floor(left) or "?")
+		-- ฟักไข่ที่พร้อมแล้วระหว่างยืนวิ่ง  ไม่ต้องลงจากลู่วิ่ง
+		--
+		-- การฟักยิงรีโมทล้วน ไม่ต้องเข้าแปลง ไม่ต้องเดินไปไหน
+		--     Eggs: RequestHatchEgg          -> เริ่มฟัก
+		--     Eggs: RequestCompleteHatchEgg  -> รับสัตว์
+		-- วัดสดตอนยืนวิ่ง: ยิงแล้วตัวขยับ 0.00 studs และ speed ยังเดินขึ้นปกติ
+		-- จึงปลอดภัยที่จะทำระหว่างวิ่ง ไม่หลุดจากแท่น
+		--
+		-- ทำทุก 15 วินาที  ไข่ที่ยังไม่พร้อมเซิร์ฟตอบ false เอง ไม่ต้องเช็คก่อน
+		-- (ผู้ใช้ขอ: "ตอนนี้มันวิ่งอยู่ ไม่อยากให้หยุดไปเปิดไข่")
+		if Config.AutoHatch ~= false then
+			if not Hub.RideHatchAt or os.clock() - Hub.RideHatchAt >= 15 then
+				Hub.RideHatchAt = os.clock()
+				local before = Stats.hatched
+				pcall(hatchReadyEggs, nil, true)
+				local n = Stats.hatched - before
+				if n > 0 then
+					Hub.RideHatched = (Hub.RideHatched or 0) + n
+					-- ฟักได้แล้วรีบจัดคอกให้ตัวใหม่ลงที่  ยิงเซิร์ฟครั้งเดียวจบ
+					if equipBestF then
+						pcall(function() equipBestF:InvokeServer() end)
+						clearPetsCache()
+					end
+				end
+			end
+		end
+
+		Hub.Phase = ("ยืนวิ่งสะสม speed - รีเซ็ตอีก %s วิ%s")
+			:format(left and math.floor(left) or "?",
+				(Hub.RideHatched or 0) > 0 and (" · ฟักระหว่างวิ่ง " .. Hub.RideHatched) or "")
 
 		-- ต้องคืนเฟรมให้เกมทุกครั้ง  ห้ามลบบรรทัดนี้เด็ดขาด
 		--
