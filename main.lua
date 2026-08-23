@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "noslow-700"
+Hub.Build = "pace-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -582,6 +582,15 @@ local Config = {
 
 	-- ความเร็วช่วงชะลอ  0 = คิดเองจากเพดานที่กฎยอมให้ (WalkSpeed*1.1+8)
 	ApproachSpeed = 0,
+
+	-- ระยะห่างขั้นต่ำระหว่างการยิงรีโมทสองครั้งติดกัน (วินาที)
+	-- และเพดานจำนวนครั้งต่อวินาที  ดู Hub.pace
+	--
+	-- เกมเตะด้วย "You have been removed for cheating" เมื่อยิงถี่เกิน
+	-- ซึ่งเป็นคนละตัวกับการตรวจความเร็ว  ลูกค้าบางคนโดนบางคนไม่โดน
+	-- เพราะขึ้นกับจำนวนไข่และสัตว์ที่ต้องจัดการในรอบนั้น
+	RemoteGap = 0.10,
+	RemoteBurst = 8,
 
 	-- ต้องวิ่งช้ามาแล้วกี่วินาทีก่อนถึงจะยอมยิงคำสั่งหยิบ  0 = ไม่บังคับ
 	--
@@ -1657,6 +1666,58 @@ local fieldIsFresh   -- ตัวจริงอยู่ใต้ isResetting �
 -- ต้องมีคนคอยเขียนตำแหน่งทับไว้ตลอดจนกว่าคำตอบจะกลับมา
 -- เก็บสถานะไว้บน Hub ไม่ประกาศ local ใหม่
 --
+--==================================================================
+-- ตัวคุมจังหวะการยิงรีโมท
+--
+-- เกมมีตัวนับอัตราการยิงรีโมทฝั่งเซิร์ฟ ยิงถี่เกินโดนเตะด้วยข้อความ
+--     "You have been removed for cheating, please remove any cheats to play"
+-- ซึ่งเป็นคนละเรื่องกับการตรวจความเร็วหรือตำแหน่ง
+-- ลูกค้าบางคนโดนบางคนไม่โดน เพราะขึ้นกับจำนวนไข่/สัตว์ที่มีในรอบนั้น
+--
+-- จุดที่ยิงถี่จริงคือลูปที่วนตามจำนวนของ:
+--     ฟักไข่     ยิง 2 ครั้งต่อฟอง (เริ่มฟัก + รับสัตว์) คั่น 0.05 วิ
+--     ขายสัตว์   ยิง 1 ครั้งต่อตัว คั่น 0.15 วิ  คอกล้น 30 ตัว = 30 ครั้งรวด
+--     วางไข่     ยิง 1 ครั้งต่อฟอง
+--     ปลดลู่วิ่ง ตัวเฝ้ายิงได้ทุก 1 วินาที
+-- รวมกันแล้วพีคได้เกิน 20 ครั้งต่อวินาที ซึ่งเกินที่เซิร์ฟยอม
+--
+-- ตัวนี้บังคับสองชั้น: ระยะห่างขั้นต่ำระหว่างสองครั้งติดกัน
+-- และเพดานจำนวนครั้งต่อวินาทีแบบหน้าต่างเลื่อน
+-- เรียกก่อนยิงทุกครั้ง มันจะหน่วงให้เองเท่าที่จำเป็น ไม่ต้องคิดเอง
+Hub.RemoteAt, Hub.RemoteLog = 0, {}
+Hub.pace = function(gap)
+	local minGap = tonumber(gap) or tonumber(Config.RemoteGap) or 0.10
+	local burst = math.max(1, math.floor(tonumber(Config.RemoteBurst) or 8))
+
+	-- ชั้นที่ 1: ห่างจากครั้งก่อนอย่างน้อย minGap
+	local wait1 = (Hub.RemoteAt + minGap) - os.clock()
+	if wait1 > 0 then
+		Hub.RemotePaced = (Hub.RemotePaced or 0) + 1
+		task.wait(wait1)
+	end
+
+	-- ชั้นที่ 2: ใน 1 วินาทีที่ผ่านมาต้องไม่เกิน burst ครั้ง
+	-- ตัดรายการที่เก่ากว่า 1 วินาทีทิ้งก่อนนับ
+	local now = os.clock()
+	local keep = {}
+	for _, t in ipairs(Hub.RemoteLog) do
+		if now - t < 1 then keep[#keep + 1] = t end
+	end
+	Hub.RemoteLog = keep
+	if #keep >= burst then
+		local oldest = keep[1]
+		local wait2 = (oldest + 1) - now
+		if wait2 > 0 then
+			Hub.RemoteThrottled = (Hub.RemoteThrottled or 0) + 1
+			task.wait(wait2)
+		end
+	end
+
+	Hub.RemoteAt = os.clock()
+	Hub.RemoteLog[#Hub.RemoteLog + 1] = Hub.RemoteAt
+	Hub.RemoteCount = (Hub.RemoteCount or 0) + 1
+end
+
 -- Luau จำกัดตัวแปร local ระดับบนสุดไว้ที่ 200 ตัว ไฟล์นี้ใช้ไป 198 แล้ว
 -- เพิ่มอีกสามตัวเมื่อไหร่คอมไพล์ไม่ผ่านทั้งไฟล์ทันที และไม่มีข้อความบอกชัดๆ
 -- อาการคือรันแล้วเงียบ สคริปต์เก่ายังวิ่งอยู่ เข้าใจผิดว่าโค้ดใหม่ไม่ได้ผล
@@ -2162,6 +2223,7 @@ Hub.clearTreadmillState = function(force)
 
 	-- ไคลเอนต์มาตรฐานเช็คว่าคืน true  เราเช็คแบบเดียวกัน
 	-- ห่อ pcall เพราะ InvokeServer ค้างได้ถ้าเซิร์ฟไม่ตอบ
+	Hub.pace()
 	local ok, res = pcall(function() return rf:InvokeServer() end)
 	if ok and res == true then
 		Hub.TreadmillActive = false
@@ -5246,6 +5308,7 @@ local function placePendingEggs()
 			-- นับจำนวนครั้งที่ยิงเซิร์ฟ  เกมมีตัวจำกัดอัตราที่สั่งแบนได้
 			-- (ReplicatedStorage/Library/Modules/RateLimiter.luau) ต้องเห็นตัวเลขนี้
 			Hub.PlaceCalls = (Hub.PlaceCalls or 0) + 1
+			Hub.pace()
 			local ok, msg = placeF:InvokeServer({ Uid = uid, LocalCFrame = cf })
 			if ok == true then
 				placed += 1
@@ -5352,12 +5415,13 @@ local function hatchReadyEggs(limit, force)
 			if hatched >= (tonumber(Config.HatchWhenBusy) or 3) then break end
 		end
 		if rec.Placement ~= nil then
+			Hub.pace()
 			local ok = hatchF:InvokeServer(uid)
 			if ok == true then
 				task.wait(0.4)
+				Hub.pace()
 				if hatchEndF:InvokeServer(uid) == true then hatched += 1 end
 			end
-			task.wait(0.05)
 		end
 	end
 	-- ไปลองแล้วได้/ไม่ได้ ใช้ปรับความถี่ของการแวะรอบหน้า
@@ -5485,6 +5549,7 @@ local function placePets()
 		-- รอบที่ว่างอยู่ เก็บใบแรกได้ที่วินาทีที่ 1.8  ต่างกัน 11 วินาที = ของดีโดนชิงหมด
 		-- งานบ้านทำตอนไหนก็ได้ ไข่ดีมีให้แย่งแค่ไม่กี่วินาที
 		if not Config.Running or not alive() or fieldIsFresh() or Hub.quietNow() then break end
+		Hub.pace()
 		if petEquipF:InvokeServer(p.uid) == true then n += 1 end
 		task.wait(0.1)
 	end
@@ -5541,6 +5606,7 @@ local function autoSellWeak(force, limit)
 		if limit and sold >= limit then break end
 		-- ขายแล้วเอาคืนไม่ได้ กดหยุดเมื่อไหร่ต้องหยุดทันที ห้ามขายต่อให้จบลูป
 		if not force and (not Config.Running or not alive()) then break end
+		Hub.pace()
 		if sellF:InvokeServer(p.uid) == true then
 			sold += 1
 		end
@@ -6000,6 +6066,7 @@ Hub.rideTreadmill = function()
 	if Hub.TreadmillActive == true then
 		local uq = net and net:FindFirstChild(TREAD_UNEQUIP)
 		if uq and uq:IsA("RemoteFunction") then
+			Hub.pace()
 			pcall(function() uq:InvokeServer() end)
 			Hub.RidePreClear = (Hub.RidePreClear or 0) + 1
 			task.wait(0.3)
@@ -6035,6 +6102,7 @@ Hub.rideTreadmill = function()
 		if not seen then
 			Hub.RideRayMiss = (Hub.RideRayMiss or 0) + 1
 		elseif rf and rf:IsA("RemoteFunction") then
+			Hub.pace()
 			local ok, res = pcall(function() return rf:InvokeServer() end)
 			Hub.RideEquipRes = tostring(res)
 			if ok and res == true then
@@ -6055,7 +6123,8 @@ Hub.rideTreadmill = function()
 			-- ปฏิเสธเพราะยังติดของเก่าค้าง ล้างแล้วลองใหม่รอบหน้า
 			local uq = net and net:FindFirstChild(TREAD_UNEQUIP)
 			if uq and uq:IsA("RemoteFunction") then
-				pcall(function() uq:InvokeServer() end)
+				Hub.pace()
+			pcall(function() uq:InvokeServer() end)
 			end
 		end
 		task.wait(1.3)   -- คูลดาวน์ของเกมคือ 1.25 วิ ยิงถี่กว่านั้นเสียเปล่า
@@ -6520,6 +6589,7 @@ local function warpCycle()
 						break
 					end
 
+					Hub.pace()
 					local ok = carryF:InvokeServer({ Uid = waitEgg.Uid })
 					if ok == true then
 						Stats.stolen += 1
@@ -7464,6 +7534,7 @@ local function cycle()
 			task.wait(1)
 		else
 			move(egg.BottomCFrame.Position + Vector3.new(0, 3, 0))
+			Hub.pace()
 			local ok, msg = carryF:InvokeServer({ Uid = egg.Uid })
 			if ok == true then got = egg break end
 			lastMsg = tostring(msg)
