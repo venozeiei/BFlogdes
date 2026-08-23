@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "trailwatch-700"
+Hub.Build = "tmname-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -600,6 +600,10 @@ local Config = {
 
 	-- ซื้อ Trail อัตโนมัติ  เอาตัวที่เร่ง speed สูงสุดที่เงินถึง (ดู Hub.buyBestTrail)
 	AutoTrail = true,
+
+	-- อัปเกรดลู่วิ่งอัตโนมัติ  อัปทีละขั้นจนเงินไม่พอ (ดู Hub.upgradeTreadmill)
+	-- ระดับสูงขึ้น = ได้ speed ต่อก้าวมากขึ้นมาก (x2 -> x2000)
+	AutoTreadmill = true,
 
 	-- ไปยืนบนแท่นลูกวิ่งของแปลงตัวเองระหว่างรอไข่รอบใหม่
 	--
@@ -4170,6 +4174,72 @@ end
 --
 -- กติกาตามที่เจ้าของสั่ง: ไม่ต้องไล่ซื้อทุกอัน
 -- เอาอันที่ speed สูงสุดที่เงินถึง ณ ตอนนั้น แล้วเก็บเงินซื้ออันสูงกว่าต่อไปเรื่อยๆ
+--==================================================================
+-- อัปเกรดลู่วิ่งให้สูงที่สุดเท่าที่เงินถึง
+--
+-- ลู่วิ่งไม่ได้ซื้อเป็นชิ้นๆ แต่เป็นระดับต่อเนื่อง อัปทีละขั้นจากระดับปัจจุบัน
+-- อ่านข้อมูลจากเกมเอง ไม่ฝังราคาไว้:
+--     Treadmills.GetOrdered()          -> รายการเรียงตามระดับ
+--     Treadmills.GetByUpgradeLevel(n)  -> ตัวที่ระดับ n
+--     Save.Get(player).TreadmillUpgradeLevel  -> ระดับปัจจุบัน
+--     Treadmills: RequestUpgrade (RemoteFunction) -> สั่งอัป
+--
+-- ระดับที่อ่านได้จากเกมสด (speed / ราคา):
+--   1 Treadmill x2 · 2 Sci-Fi x5 $15K · 3 Flame x12 $250K · 4 Celebrity x30 $5M
+--   5 Golden x80 $120M · 6 The Freeze x100 $3B · 7 Lucky Block x200 $75B
+--   8 Hacker x500 $2T · 9 Demonic x1000 $50T · 10 Angelic x2000 $1,000T
+--
+-- ต้องอัปทีละขั้น จึงวนอัปจนกว่าเงินจะไม่พอ ไม่ใช่กระโดดข้ามระดับ
+Hub.upgradeTreadmill = function(force)
+	if Config.AutoTreadmill == false then return false end
+	if not force and os.clock() - (Hub.TmAt or -1e9) < 60 then return false end
+	Hub.TmAt = os.clock()
+
+	local okT, T = pcall(function() return require(ReplicatedStorage.Directory.Treadmills) end)
+	if not okT or type(T) ~= "table" or type(T.GetByUpgradeLevel) ~= "function" then return false end
+	local okS, Save = pcall(function() return require(ReplicatedStorage.Library.Client.Save) end)
+	if not okS then return false end
+	local rf = ReplicatedStorage.Network:FindFirstChild("Treadmills: RequestUpgrade")
+	if not rf or not rf:IsA("RemoteFunction") then return false end
+
+	local did = 0
+	-- อัปได้เรื่อยๆ ตราบใดที่เงินยังพอ  จำกัดรอบกันวนไม่จบถ้าเซิร์ฟไม่ขยับระดับ
+	for _ = 1, 12 do
+		local okG, data = pcall(function() return Save.Get(LocalPlayer) end)
+		if not okG or type(data) ~= "table" then break end
+		local lvl = tonumber(data.TreadmillUpgradeLevel) or 0
+		local cash = tonumber(data.Money) or 0
+		Hub.TmLevel, Hub.TmMoney = lvl, cash
+
+		local okN, nxt = pcall(T.GetByUpgradeLevel, lvl + 1)
+		if not okN or type(nxt) ~= "table" then break end   -- สูงสุดแล้ว
+		local price = tonumber(nxt.Price) or math.huge
+		Hub.TmNext = tostring(nxt._id)
+		Hub.TmNextPrice = price
+		if price > cash then break end                      -- เงินไม่พอ พอแค่นี้
+
+		-- ต้องส่ง "ชื่อลู่วิ่ง" เป็นสตริงตัวเดียว ไม่ใช่เลขระดับ
+		-- ทดสอบครบทุกแบบแล้ว มีแบบเดียวที่ผ่าน:
+		--   InvokeServer(2)                     -> TreadmillService:891 assertion failed
+		--   InvokeServer("Sci-FiTreadmill")     -> true   <- ถูกแบบนี้
+		--   InvokeServer({Level = 2})           -> assertion failed
+		--   InvokeServer({TreadmillId = "..."}) -> assertion failed
+		-- รูปแบบเดียวกับ Trails: RequestPurchase
+		local okU, res = pcall(function() return rf:InvokeServer(tostring(nxt._id)) end)
+		if not okU or res == false then
+			Hub.TmFail = (Hub.TmFail or 0) + 1
+			Hub.TmFailMsg = tostring(res)
+			break
+		end
+		did = did + 1
+		Hub.TmUpgraded = (Hub.TmUpgraded or 0) + 1
+		log(("อัปลู่วิ่งเป็น %s (x%s) ราคา %s")
+			:format(tostring(nxt._id), tostring(nxt.SpeedMultiplier), tostring(price)))
+		task.wait(0.4)   -- ให้เซิร์ฟบันทึกระดับใหม่ก่อนอ่านซ้ำ
+	end
+	return did > 0
+end
+
 Hub.buyBestTrail = function(force)
 	if Config.AutoTrail == false then return false end
 	if not force and os.clock() - (Hub.TrailAt or -1e9) < 60 then return false end
@@ -8080,6 +8150,7 @@ task.spawn(function()
 	task.wait(10)   -- ให้ข้อมูลผู้เล่นโหลดเสร็จก่อน
 	while Hub.Alive do
 		if Config.AutoTrail ~= false then pcall(Hub.buyBestTrail) end
+		if Config.AutoTreadmill ~= false then pcall(Hub.upgradeTreadmill) end
 		task.wait(20)
 	end
 end)
