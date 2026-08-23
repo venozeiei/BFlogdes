@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "hatchride-700"
+Hub.Build = "preclear-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -5971,9 +5971,30 @@ Hub.rideTreadmill = function()
 	task.wait(0.4)   -- ให้ตัวลงพื้นก่อน เรย์ถึงจะโดน
 
 	-- ยิงสั่งขึ้น  ลองซ้ำได้ตามคูลดาวน์ของเกมเอง
-	local rf = ReplicatedStorage:FindFirstChild("Network")
-	rf = rf and rf:FindFirstChild(TREAD_EQUIP)
+	local net = ReplicatedStorage:FindFirstChild("Network")
+	local rf = net and net:FindFirstChild(TREAD_EQUIP)
 	local mounted = false
+
+	-- ติดสถานะเก่าค้างอยู่ต้องล้างก่อน ไม่งั้นขึ้นใหม่ไม่ได้
+	--
+	-- ไคลเอนต์ของเกมเช็คข้อนี้เองก่อนยิง (บรรทัด 362: if u2 ~= nil then return end)
+	-- u2 คือลู่วิ่งที่ติดอยู่ตอนนี้  มีค่าอยู่ = ไม่ยอมให้ขึ้นตัวใหม่
+	-- เซิร์ฟก็ตรวจแบบเดียวกัน คืน false ทุกครั้ง
+	--
+	-- วัดสด: ห่างกลางสายพาน 0.00 เรย์โดนโมเดลลู่วิ่ง แต่ยิงพลาดรวด 4 ครั้ง
+	-- เพราะ Hub.TreadmillActive เป็น true ค้างมาจากรอบก่อน
+	--
+	-- ยิงรีโมทปลดตรงๆ ตรงนี้ ไม่ผ่าน Hub.unequipOK
+	-- เพราะการ์ดตัวนั้นกันไม่ให้ปลดตอน Hub.Riding ซึ่งตอนนี้เป็นจริงอยู่
+	-- แต่นี่คือการล้างของเก่าเพื่อจะขึ้นใหม่ ไม่ใช่การเลิกวิ่ง
+	if Hub.TreadmillActive == true then
+		local uq = net and net:FindFirstChild(TREAD_UNEQUIP)
+		if uq and uq:IsA("RemoteFunction") then
+			pcall(function() uq:InvokeServer() end)
+			Hub.RidePreClear = (Hub.RidePreClear or 0) + 1
+			task.wait(0.3)
+		end
+	end
 	for try = 1, 4 do
 		local _, h = char()
 		if not h then break end
@@ -6004,6 +6025,20 @@ Hub.rideTreadmill = function()
 				break
 			end
 			Hub.RideEquipFail = (Hub.RideEquipFail or 0) + 1
+
+			-- เซิร์ฟปฏิเสธแต่เราติดสถานะอยู่แล้ว = ขึ้นอยู่แล้ว ถือว่าสำเร็จ
+			if Hub.TreadmillActive == true then
+				mounted = true
+				Hub.RideAlready = (Hub.RideAlready or 0) + 1
+				Hub.RideOnBelt = (Hub.RideOnBelt or 0) + 1
+				break
+			end
+
+			-- ปฏิเสธเพราะยังติดของเก่าค้าง ล้างแล้วลองใหม่รอบหน้า
+			local uq = net and net:FindFirstChild(TREAD_UNEQUIP)
+			if uq and uq:IsA("RemoteFunction") then
+				pcall(function() uq:InvokeServer() end)
+			end
 		end
 		task.wait(1.3)   -- คูลดาวน์ของเกมคือ 1.25 วิ ยิงถี่กว่านั้นเสียเปล่า
 	end
