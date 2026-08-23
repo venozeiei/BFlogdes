@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "speedcheck-700"
+Hub.Build = "chores2-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -6015,6 +6015,24 @@ Hub.rideTreadmill = function()
 		if h then Hub.RideGap = (h.Position - spot).Magnitude end
 	end
 
+	-- บันทึกวิถีหลังขึ้นแท่น 10 วินาที  อ่านอย่างเดียว ห้ามแตะตัวละคร
+	-- ไว้ดูว่าถ้าหลุด หลุดตอนไหน และ speed หยุดพร้อมกันไหม
+	Hub.RideLog = {}
+	task.spawn(function()
+		local ls = LocalPlayer:FindFirstChild("leaderstats")
+		local sv = ls and ls:FindFirstChild("Speed")
+		local s0 = sv and tonumber(sv.Value) or 0
+		for i = 1, 20 do
+			task.wait(0.5)
+			local _, h = char()
+			if not h then break end
+			Hub.RideLog[#Hub.RideLog + 1] = ("%.1f d%.1f +%d pin%s"):format(
+				i * 0.5, (h.Position - spot).Magnitude,
+				(sv and tonumber(sv.Value) or 0) - s0,
+				(Hub.PinPos and os.clock() < (Hub.PinUntil or 0)) and "ON" or "off")
+		end
+	end)
+
 	-- หลังจากนี้ห้ามขยับต่อเด็ดขาด
 	--
 	-- เคยมีลูป "จัดให้ตรงกลาง" ที่เขียน CFrame ซ้ำได้ถึง 20 ครั้งใน 2 วินาที
@@ -7028,30 +7046,6 @@ local function warpCycle()
 		Hub.Phase = "วาปกลับกลาง SAFE ZONE"
 		move(warpHome)
 
-		-- เก็บครบโควตาแล้ว ไปยืนวิ่งสะสม speed จนใกล้รีเซ็ต (ดู Hub.rideTreadmill)
-		--
-		-- ทำหลังฝากไข่และก่อนงานบ้าน  ตัวมันเองจะออกมาเองเมื่อเหลือเวลาเท่า PreResetHold
-		-- และปลดสถานะวิ่งให้เรียบร้อยก่อนกลับ ไม่งั้นรอบหน้าเก็บไข่ไม่ติด
-		-- ต้องมีเวลาเหลือมากพอถึงจะคุ้มไป ไม่งั้นวิ่งไปกลับเปล่าๆ
-		if Config.RideTreadmill ~= false and got > 0 then
-			local left = Hub.nightIn() or secondsToReset()
-			local need = (tonumber(Config.PreResetHold) or 20) + 30
-			Hub.RideTry = (Hub.RideTry or 0) + 1
-			Hub.RideTryLeft = left            -- เวลาที่เหลือตอนตัดสินใจ
-			Hub.RideTryNeed = need
-			if left ~= nil and left > need then
-				pcall(Hub.rideTreadmill)
-			else
-				-- ไม่คุ้มไป จดไว้ว่าเพราะอะไร จะได้ไม่ต้องเดา
-				Hub.RideSkip = (Hub.RideSkip or 0) + 1
-				Hub.RideSkipWhy = (left == nil) and "อ่านเวลาไม่ได้"
-					or ("เหลือ " .. math.floor(left) .. " วิ ต้องการเกิน " .. need)
-			end
-		elseif Config.RideTreadmill ~= false then
-			Hub.RideSkip = (Hub.RideSkip or 0) + 1
-			Hub.RideSkipWhy = "รอบนี้ไม่ได้ไข่เลย"
-		end
-
 		if got > 0 then
 			-- จัดคอกให้ดีที่สุดทุกรอบ
 			--
@@ -7147,6 +7141,33 @@ local function warpCycle()
 				placePendingEggs()
 			end
 			move(warpHome)
+
+			-- งานฐานเสร็จแล้วค่อยไปยืนวิ่งสะสม speed จนใกล้รีเซ็ต
+			--
+			-- ต้องทำหลังงานฐานเสมอ  ห้ามย้ายขึ้นไปก่อน
+			-- ยืนวิ่งกินเวลาเป็นนาที ถ้าขึ้นไปก่อนวางไข่กับขายสัตว์
+			-- ไข่ที่เพิ่งเก็บมาจะค้างในกระเป๋าทั้งช่วงนั้น ไม่ได้ฟัก ไม่ได้เงิน
+			-- และไอดีใหม่ที่ยังไม่มีเงินซื้อลู่วิ่งจะยิ่งเสียเวลาเปล่า
+			-- (ผู้ใช้ทัก: "เก็บ 5 ใบเสร็จมาวิ่งเลย มันยังไม่ทันวางไข่เปิดไข่กะขายสัตว์")
+			--
+			-- ตัวมันเองจะออกมาเมื่อเหลือเวลาเท่า PreResetHold แล้วปลดสถานะให้เรียบร้อย
+			-- ต้องมีเวลาเหลือมากพอถึงจะคุ้มไป ไม่งั้นวิ่งไปกลับเปล่าๆ
+			if Config.RideTreadmill ~= false then
+				local left = Hub.nightIn() or secondsToReset()
+				local need = (tonumber(Config.PreResetHold) or 20) + 30
+				Hub.RideTry = (Hub.RideTry or 0) + 1
+				Hub.RideTryLeft = left            -- เวลาที่เหลือตอนตัดสินใจ
+				Hub.RideTryNeed = need
+				if left ~= nil and left > need then
+					pcall(Hub.rideTreadmill)
+				else
+					-- ไม่คุ้มไป จดไว้ว่าเพราะอะไร จะได้ไม่ต้องเดา
+					Hub.RideSkip = (Hub.RideSkip or 0) + 1
+					Hub.RideSkipWhy = (left == nil) and "อ่านเวลาไม่ได้"
+						or ("เหลือ " .. math.floor(left) .. " วิ ต้องการเกิน " .. need)
+				end
+			end
+
 			Hub.Phase = "ยืนรอที่ SAFE ZONE"
 			return nil
 		end
