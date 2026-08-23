@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "pace-700"
+Hub.Build = "lean-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -591,6 +591,19 @@ local Config = {
 	-- เพราะขึ้นกับจำนวนไข่และสัตว์ที่ต้องจัดการในรอบนั้น
 	RemoteGap = 0.10,
 	RemoteBurst = 8,
+
+	-- แจ้งเตือนไข่หายากล่วงหน้าเข้า Discord
+	--
+	-- เกมเปิดเผยไข่หายากของรอบถัดไปให้ก่อนที่มันจะโผล่จริง
+	--     Eggs: AreaEggRareSpawnsRevealed              RemoteEvent  ยิงมาเอง
+	--     Eggs: RequestAreaEggRareSpawnPresentations   RemoteFunction  ถามย้อนหลังได้
+	-- ทั้งคู่คืนข้อมูลชุดเดียวกัน:
+	--     { PeriodIndex, DayStartsAt, RareSpawns = { {EggUid, Message, RarityId, SoundId} } }
+	--
+	-- ใส่ลิงก์ webhook ของ Discord ตัวเองลงไป  ว่างไว้ = ปิดสนิท ไม่ส่งอะไรทั้งนั้น
+	Webhook = "",
+	WebhookName = "",       -- ชื่อที่จะขึ้นในข้อความ  ว่างไว้ = ใช้ชื่อผู้เล่น
+	WebhookQuiet = false,   -- true = ส่งเฉพาะตอนมีไข่หายาก ไม่ส่งตอนรอบว่าง
 
 	-- ต้องวิ่งช้ามาแล้วกี่วินาทีก่อนถึงจะยอมยิงคำสั่งหยิบ  0 = ไม่บังคับ
 	--
@@ -1718,6 +1731,39 @@ Hub.pace = function(gap)
 	Hub.RemoteCount = (Hub.RemoteCount or 0) + 1
 end
 
+-- ยิงรีโมทแบบเข้าคิว  ห้ามซ้อนกันเด็ดขาด
+--
+-- สคริปต์มีลูปเบื้องหลังหลายตัวที่ยิงรีโมทได้พร้อมกับลูปหลัก
+--     ตัวเฝ้าลู่วิ่ง   ทุก 1 วินาที
+--     ตัวเฝ้าฐาน      ทุก 1 วินาที
+--     ฟักระหว่างวิ่ง  ทุก 15 วินาที
+-- สองตัวยิงพร้อมกันได้ = เซิร์ฟเห็นคำขอซ้อนกันจากไคลเอนต์เดียว
+-- ผู้เล่นจริงทำแบบนั้นไม่ได้ เพราะ InvokeServer หยุดรอคำตอบทีละคำขอ
+--
+-- ผู้ใช้สังเกตเอง: "ตอนรันสคริปต์แล้วลองยิงรีโมทเอง มันขึ้นแบบนี้
+--                   แต่พอไม่รันสคริปต์ ยิงเองได้ปกติ"
+-- = การยิงซ้อนกับที่สคริปต์กำลังยิงอยู่ คือสิ่งที่ทำให้โดนเตะ
+--
+-- ตัวนี้บังคับให้ยิงทีละคำขอเรียงกัน  ใครมาก่อนได้ก่อน
+-- คืนค่าเหมือน pcall คือ (ผลลัพธ์ที่ 1, ผลลัพธ์ที่ 2) หรือ nil ถ้าพัง
+Hub.RemoteBusy = false
+Hub.rq = function(fn, ...)
+	local t0 = os.clock()
+	while Hub.RemoteBusy and os.clock() - t0 < 6 do
+		Hub.RemoteQueued = (Hub.RemoteQueued or 0) + 1
+		task.wait(0.03)
+	end
+	Hub.pace()
+	Hub.RemoteBusy = true
+	local packed = table.pack(pcall(fn, ...))
+	Hub.RemoteBusy = false
+	if not packed[1] then
+		Hub.RemoteErr = (Hub.RemoteErr or 0) + 1
+		return nil
+	end
+	return packed[2], packed[3]
+end
+
 -- Luau จำกัดตัวแปร local ระดับบนสุดไว้ที่ 200 ตัว ไฟล์นี้ใช้ไป 198 แล้ว
 -- เพิ่มอีกสามตัวเมื่อไหร่คอมไพล์ไม่ผ่านทั้งไฟล์ทันที และไม่มีข้อความบอกชัดๆ
 -- อาการคือรันแล้วเงียบ สคริปต์เก่ายังวิ่งอยู่ เข้าใจผิดว่าโค้ดใหม่ไม่ได้ผล
@@ -1936,7 +1982,7 @@ local TREAD_CHANGED = "Treadmills: ActiveTreadmillChanged"
 local TREAD_UNEQUIP = "Treadmills: RequestUnequip"
 -- ตัวสั่งขึ้นแท่นประจำแปลง  ไม่มีพารามิเตอร์ เซิร์ฟตรวจตำแหน่งเราเอง
 -- (ถอดจาก Game.Plots.TreadmillStaticController ของเกม บรรทัด 397)
-local TREAD_EQUIP = "Treadmills: RequestEquipStatic"
+Hub.TREAD_EQUIP = "Treadmills: RequestEquipStatic"
 
 -- ต่อสัญญาณครั้งเดียวตอนโหลด  ต่อกับรีโมทดิบตรงๆ
 -- ไม่ผ่าน Network.Fired ของเกม เพราะตัวนั้นจะไปสร้าง BindableEvent ผูกบัญชีไว้ด้วย
@@ -1981,15 +2027,14 @@ end
 --
 -- ตัวที่โกหกไม่ได้คือ Speed ขยับ  ขยับ = อยู่บนแท่นแน่นอน
 -- อ่านทุก 1 วินาทีจากตัวเฝ้าเบื้องหลังอยู่แล้ว จึงเทียบค่าเดิมได้เลย
-local lastSpeedVal, lastSpeedAt = nil, 0
 Hub.treadmillStuck = function()
 	if Hub.TreadmillActive == true then return true end
 	local ls = LocalPlayer:FindFirstChild("leaderstats")
 	local sp = ls and ls:FindFirstChild("Speed")
 	local now = sp and tonumber(sp.Value)
 	if not now then return false end
-	local was, at = lastSpeedVal, lastSpeedAt
-	lastSpeedVal, lastSpeedAt = now, os.clock()
+	local was, at = Hub.LastSpeedVal, Hub.LastSpeedAt
+	Hub.LastSpeedVal, Hub.LastSpeedAt = now, os.clock()
 	-- ต้องมีค่าเก่าที่อ่านมาไม่เกิน 5 วินาที ถึงจะเทียบได้
 	if was == nil or os.clock() - at > 5 then return false end
 	if now > was then
@@ -1997,6 +2042,112 @@ Hub.treadmillStuck = function()
 		return true
 	end
 	return false
+end
+
+--==================================================================
+-- แจ้งเตือนไข่หายากล่วงหน้าเข้า Discord
+--
+-- เกมบอกล่วงหน้าจริง ไม่ต้องเดา  ยืนยันจากโค้ดของเกมเอง:
+--   ReplicatedStorage.Library.Types.AreaEggResetCycle
+--       RevealPayload = { PeriodIndex, DayStartsAt, RareSpawns[] }
+--   ReplicatedStorage.Library.Client.EggCmds:273
+--       RequestAreaEggRareSpawnPresentations()  ถามย้อนหลังได้ทุกเมื่อ
+--
+-- วัดสด: ยิงถามได้ PeriodIndex 5958329 · DayStartsAt 1787498700 · RareSpawns 0
+--
+-- ส่งเมื่อ PeriodIndex เปลี่ยนเท่านั้น  รอบเดียวส่งครั้งเดียว ไม่สแปม
+--==================================================================
+Hub.WebhookSent = {}
+Hub.postHook = function(body)
+	local url = tostring(Config.Webhook or "")
+	if url == "" then return false, "ไม่ได้ตั้ง Webhook" end
+
+	-- executor แต่ละตัวตั้งชื่อไม่เหมือนกัน  ลองทุกชื่อที่มีใช้จริง
+	local send = (syn and syn.request) or (http and http.request)
+		or http_request or (fluxus and fluxus.request) or request
+	if type(send) ~= "function" then return false, "ตัวรันนี้ยิง HTTP ไม่ได้" end
+
+	local ok, res = pcall(send, {
+		Url = url,
+		Method = "POST",
+		Headers = { ["Content-Type"] = "application/json" },
+		Body = game:GetService("HttpService"):JSONEncode(body),
+	})
+	if not ok then
+		Hub.HookErr = tostring(res)
+		return false, tostring(res)
+	end
+	Hub.HookSent = (Hub.HookSent or 0) + 1
+	return true
+end
+
+-- อ่านไข่หายากของรอบปัจจุบันจากเซิร์ฟ แล้วส่งถ้ายังไม่เคยส่งรอบนี้
+Hub.checkRare = function(force)
+	if tostring(Config.Webhook or "") == "" then return end
+	local net = ReplicatedStorage:FindFirstChild("Network")
+	local rf = net and net:FindFirstChild("Eggs: RequestAreaEggRareSpawnPresentations")
+	if not rf or not rf:IsA("RemoteFunction") then return end
+
+	local okc, payload = Hub.rq(function() return rf:InvokeServer() end)
+	if okc ~= true or type(payload) ~= "table" then return end
+
+	local period = tonumber(payload.PeriodIndex)
+	if not period then return end
+	if not force and Hub.WebhookSent[period] then return end
+	Hub.WebhookSent[period] = true
+	Hub.RarePeriod = period
+
+	local list = type(payload.RareSpawns) == "table" and payload.RareSpawns or {}
+	Hub.RareCount = #list
+	if #list == 0 and Config.WebhookQuiet == true then return end
+
+	local who = tostring(Config.WebhookName or "")
+	if who == "" then who = LocalPlayer.Name end
+	local startsAt = tonumber(payload.DayStartsAt) or 0
+	local left = startsAt - os.time()
+
+	local lines = {}
+	for i, e in ipairs(list) do
+		if i > 20 then
+			lines[#lines + 1] = ("...และอีก %d รายการ"):format(#list - 20)
+			break
+		end
+		lines[#lines + 1] = ("**%s** — %s"):format(
+			tostring(e.RarityId or "?"), tostring(e.Message or "-"))
+	end
+	if #lines == 0 then lines[1] = "รอบนี้ไม่มีไข่หายาก" end
+
+	Hub.postHook({
+		username = "Steal An Egg",
+		embeds = { {
+			title = (#list > 0)
+				and ("ไข่หายากรอบหน้า %d ใบ"):format(#list)
+				or "รอบหน้าไม่มีไข่หายาก",
+			description = table.concat(lines, "\n"),
+			color = (#list > 0) and 16766720 or 8421504,
+			fields = {
+				{ name = "ผู้เล่น", value = who, inline = true },
+				{ name = "รอบที่", value = tostring(period), inline = true },
+				{ name = "เริ่มอีก", value = (left > 0)
+					and ("%d นาที %d วินาที"):format(math.floor(left / 60), left % 60)
+					or "เริ่มแล้ว", inline = true },
+			},
+		} },
+	})
+end
+
+-- เฝ้าสัญญาณที่เกมยิงมาเอง  ได้ทันทีไม่ต้องรอรอบถาม
+Hub.watchRare = function()
+	if Hub.RareHooked then return true end
+	local net = ReplicatedStorage:FindFirstChild("Network")
+	local ev = net and net:FindFirstChild("Eggs: AreaEggRareSpawnsRevealed")
+	if not ev or not ev:IsA("RemoteEvent") then return false end
+	ev.OnClientEvent:Connect(function()
+		Hub.RareSeen = (Hub.RareSeen or 0) + 1
+		task.spawn(function() pcall(Hub.checkRare) end)
+	end)
+	Hub.RareHooked = true
+	return true
 end
 
 --==================================================================
@@ -2223,8 +2374,8 @@ Hub.clearTreadmillState = function(force)
 
 	-- ไคลเอนต์มาตรฐานเช็คว่าคืน true  เราเช็คแบบเดียวกัน
 	-- ห่อ pcall เพราะ InvokeServer ค้างได้ถ้าเซิร์ฟไม่ตอบ
-	Hub.pace()
-	local ok, res = pcall(function() return rf:InvokeServer() end)
+	local res = Hub.rq(function() return rf:InvokeServer() end)
+	local ok = res ~= nil
 	if ok and res == true then
 		Hub.TreadmillActive = false
 		Hub.TreadmillName = nil
@@ -2331,6 +2482,16 @@ task.spawn(function()
 			-- (ผู้ใช้เห็นเอง: เฟสขึ้น "ปลดสถานะลูกวิ่ง" ทั้งที่กำลังยืนอยู่)
 			if Config.TreadmillWatch ~= false and not Hub.Riding and Hub.treadmillStuck() then
 				pcall(Hub.clearTreadmillState, true)
+			end
+
+			-- ต่อสัญญาณไข่หายากให้ติด แล้วเช็ครอบละครั้ง
+			-- ถามซ้ำได้ไม่เปลือง เพราะ Hub.checkRare จำ PeriodIndex ที่ส่งไปแล้ว
+			if tostring(Config.Webhook or "") ~= "" then
+				pcall(Hub.watchRare)
+				if not Hub.RareAt or os.clock() - Hub.RareAt >= 20 then
+					Hub.RareAt = os.clock()
+					pcall(Hub.checkRare)
+				end
 			end
 			if Config.StallWatch ~= false then pcall(Hub.unstickStalled) end
 		end
@@ -4742,11 +4903,34 @@ function snapshot()
 	-- นอกช่วงนั้นคงไว้ 0.4 เหมือนเดิม ไม่งั้นเปลืองการยิงเซิร์ฟ 231ms ฟรีๆ
 	-- 0.1 แรงไป: การถามหนึ่งครั้งใช้ 231ms ตั้ง 0.1 = ถามซ้อนกันตลอด
 	-- แย่งเวลาจากการเก็บจนเก็บได้ไม่ครบ  0.25 คือถามติดกันพอดีไม่ทับ
-	local ttl = Hub.BoxUp and 0.25 or 0.4
+	-- ถามถี่เท่าที่จำเป็นจริงๆ เท่านั้น
+	--
+	-- ตัวนี้คือแหล่งยิงรีโมทที่เยอะที่สุดในสคริปต์ ยิงตลอดเวลาไม่เคยหยุด
+	-- 0.4 วิต่อครั้ง = 2.5 ครั้ง/วินาที คูณด้วยเวลาทั้งรอบ = หลักพันครั้งต่อชั่วโมง
+	-- ไคลเอนต์จริงไม่ถามซ้ำแบบนี้เลย มันรอ RemoteEvent ที่เกมยิงมาให้
+	-- (Eggs: AreaEggUpdated · AreaEggBatchUpdated · AreaEggRemoved)
+	-- การถามรัวจึงเป็นสิ่งที่ต่างจากผู้เล่นจริงมากที่สุด และน่าจะเป็นตัวที่โดนนับ
+	--
+	-- ช่วงที่ไม่ต้องรู้สภาพสนามเลยก็อย่าถาม:
+	--   ยืนวิ่งอยู่บนลู่วิ่ง   ไม่ได้จะไปเก็บอะไร  ถามทุก 10 วิพอ
+	--   วิ่งจบรอไข่รีเซ็ต     รอเฉยๆ             ถามทุก 5 วิพอ
+	--   ช่วงไข่กำลังสลับชุด    ต้องรู้เร็วที่สุด    0.25 วิเท่าเดิม
+	--   ช่วงออกไปเก็บไข่      ต้องรู้เร็ว          0.4 วิเท่าเดิม
+	local ttl
+	if Hub.Riding then
+		ttl = 10
+	elseif Hub.BoxUp then
+		ttl = 0.25
+	elseif Hub.RideDoneAt then
+		ttl = 5
+	else
+		ttl = 0.4
+	end
 	if snapCache and now - snapAt < ttl then return snapCache end
 
-	local ok, res = pcall(function() return snapF:InvokeServer({}) end)
-	if not ok or type(res) ~= "table" then return snapCache or {} end
+	-- ผ่านคิวเดียวกับที่อื่น  ตัวนี้ถูกเรียกจากหลายที่พร้อมกันได้
+	local res = Hub.rq(function() return snapF:InvokeServer({}) end)
+	if type(res) ~= "table" then return snapCache or {} end
 	snapCache, snapAt = res.Records or {}, now
 	return snapCache
 end
@@ -5041,15 +5225,35 @@ end
 --==================================================================
 -- ไข่ของเรา / วาง / ฟัก
 --==================================================================
+-- ไข่ของเรา  มีแคชสั้นๆ กันการถามซ้ำถี่ๆ
+--
+-- ของเดิมไม่มีแคชเลย ยิงเซิร์ฟใหม่ทุกครั้งที่ถูกเรียก
+-- และถูกเรียกหลายที่ต่อรอบ: นับไข่ค้างในกระเป๋า · ฟักไข่ · วางไข่
+-- รวมแล้วยิงซ้ำ 3-4 ครั้งติดกันภายในไม่กี่ร้อยมิลลิวินาที ทั้งที่ค่าเท่าเดิม
+--
+-- 1.5 วินาทีสั้นพอที่ค่าจะยังตรง (ไข่ไม่ได้เปลี่ยนสถานะเร็วขนาดนั้น)
+-- และยาวพอที่การเรียกติดๆ กันในรอบเดียวจะใช้ค่าเดิมทั้งหมด
+-- ล้างแคชทันทีหลังฟักหรือวางสำเร็จ ด้วย Hub.clearEggCache()
+Hub.EggCache, Hub.EggCacheAt = nil, -math.huge
+Hub.clearEggCache = function()
+	Hub.EggCache, Hub.EggCacheAt = nil, -math.huge
+end
 local function ownedEggs()
-	local ok, res = pcall(function() return eggSnapF:InvokeServer({}) end)
-	if not ok or type(res) ~= "table" then return {} end
+	if Hub.EggCache and os.clock() - Hub.EggCacheAt < 1.5 then
+		Hub.EggCacheHit = (Hub.EggCacheHit or 0) + 1
+		return Hub.EggCache
+	end
+	local res = Hub.rq(function() return eggSnapF:InvokeServer({}) end)
+	if type(res) ~= "table" then return Hub.EggCache or {} end
+	local mine = {}
 	for _, entry in pairs(res) do
 		if tostring(entry.OwnerUserId) == tostring(LocalPlayer.UserId) then
-			return entry.Records or {}
+			mine = entry.Records or {}
+			break
 		end
 	end
-	return {}
+	Hub.EggCache, Hub.EggCacheAt = mine, os.clock()
+	return mine
 end
 
 -- ตำแหน่งอ้างอิงที่เกมใช้จริง (ถอดมาจากไข่ที่วางสำเร็จ)
@@ -5308,8 +5512,9 @@ local function placePendingEggs()
 			-- นับจำนวนครั้งที่ยิงเซิร์ฟ  เกมมีตัวจำกัดอัตราที่สั่งแบนได้
 			-- (ReplicatedStorage/Library/Modules/RateLimiter.luau) ต้องเห็นตัวเลขนี้
 			Hub.PlaceCalls = (Hub.PlaceCalls or 0) + 1
-			Hub.pace()
-			local ok, msg = placeF:InvokeServer({ Uid = uid, LocalCFrame = cf })
+			local ok, msg = Hub.rq(function(a) return placeF:InvokeServer(a) end,
+				{ Uid = uid, LocalCFrame = cf })
+			if ok == true then Hub.clearEggCache() end   -- วางแล้วสถานะเปลี่ยน
 			if ok == true then
 				placed += 1
 				taken[key] = true   -- จำไว้ ใบถัดไปจะได้ไม่มาชนช่องนี้
@@ -5415,12 +5620,13 @@ local function hatchReadyEggs(limit, force)
 			if hatched >= (tonumber(Config.HatchWhenBusy) or 3) then break end
 		end
 		if rec.Placement ~= nil then
-			Hub.pace()
-			local ok = hatchF:InvokeServer(uid)
+			local ok = Hub.rq(function(u) return hatchF:InvokeServer(u) end, uid)
 			if ok == true then
 				task.wait(0.4)
-				Hub.pace()
-				if hatchEndF:InvokeServer(uid) == true then hatched += 1 end
+				if Hub.rq(function(u) return hatchEndF:InvokeServer(u) end, uid) == true then
+					hatched += 1
+					Hub.clearEggCache()   -- ฟักแล้วไข่หายไปจากรายการ
+				end
 			end
 		end
 	end
@@ -5549,8 +5755,7 @@ local function placePets()
 		-- รอบที่ว่างอยู่ เก็บใบแรกได้ที่วินาทีที่ 1.8  ต่างกัน 11 วินาที = ของดีโดนชิงหมด
 		-- งานบ้านทำตอนไหนก็ได้ ไข่ดีมีให้แย่งแค่ไม่กี่วินาที
 		if not Config.Running or not alive() or fieldIsFresh() or Hub.quietNow() then break end
-		Hub.pace()
-		if petEquipF:InvokeServer(p.uid) == true then n += 1 end
+		if Hub.rq(function(u) return petEquipF:InvokeServer(u) end, p.uid) == true then n += 1 end
 		task.wait(0.1)
 	end
 	if n > 0 then
@@ -5606,8 +5811,7 @@ local function autoSellWeak(force, limit)
 		if limit and sold >= limit then break end
 		-- ขายแล้วเอาคืนไม่ได้ กดหยุดเมื่อไหร่ต้องหยุดทันที ห้ามขายต่อให้จบลูป
 		if not force and (not Config.Running or not alive()) then break end
-		Hub.pace()
-		if sellF:InvokeServer(p.uid) == true then
+		if Hub.rq(function(u) return sellF:InvokeServer(u) end, p.uid) == true then
 			sold += 1
 		end
 		task.wait(0.15)
@@ -6049,7 +6253,7 @@ Hub.rideTreadmill = function()
 
 	-- ยิงสั่งขึ้น  ลองซ้ำได้ตามคูลดาวน์ของเกมเอง
 	local net = ReplicatedStorage:FindFirstChild("Network")
-	local rf = net and net:FindFirstChild(TREAD_EQUIP)
+	local rf = net and net:FindFirstChild(Hub.TREAD_EQUIP)
 
 	-- ติดสถานะเก่าค้างอยู่ต้องล้างก่อน ไม่งั้นขึ้นใหม่ไม่ได้
 	--
@@ -6066,8 +6270,7 @@ Hub.rideTreadmill = function()
 	if Hub.TreadmillActive == true then
 		local uq = net and net:FindFirstChild(TREAD_UNEQUIP)
 		if uq and uq:IsA("RemoteFunction") then
-			Hub.pace()
-			pcall(function() uq:InvokeServer() end)
+			Hub.rq(function() return uq:InvokeServer() end)
 			Hub.RidePreClear = (Hub.RidePreClear or 0) + 1
 			task.wait(0.3)
 		end
@@ -6084,26 +6287,44 @@ Hub.rideTreadmill = function()
 		local _, h = char()
 		if not h then break end
 
-		-- ไถลออกจากกลางก็วางกลับก่อนยิง  เซิร์ฟตรวจตำแหน่งจริง
-		if (h.Position - spot).Magnitude > 2 then
+		-- วางกลับกลางสายพานทุกครั้งก่อนยิง  ไม่ว่าจะห่างเท่าไหร่
+		--
+		-- เดิมวางกลับเฉพาะตอนห่างเกิน 2 studs แล้วรอ 0.3 วิค่อยยิงเรย์
+		-- ระหว่าง 0.3 วินาทีนั้นเราถูกพัดออกไปอีก พอยิงเรย์ก็ไม่โดนแล้ว
+		-- เลยข้ามการยิงรีโมทไปเลย = ขึ้นใหม่ไม่สำเร็จสักที
+		-- (วัดสด: จับได้ว่าหยุดวิ่ง 12 ครั้ง แต่ขึ้นใหม่สำเร็จแค่ 1 ครั้ง
+		--  เพราะ RideRayHit อ่านได้ "ไม่โดน" และ RideGap อยู่ที่ 6.27)
+		--
+		-- ตอนนี้วางกลับเสมอ รอสั้นๆ แล้วยิงเรย์  ถ้าไม่โดนก็วางแล้วยิงซ้ำทันที
+		-- ไม่รออีก เพราะการรอคือสิ่งที่ทำให้หลุดตั้งแต่แรก
+		local function reseat()
 			pcall(function()
 				h.CFrame = CFrame.new(spot)
 				h.AssemblyLinearVelocity = Vector3.zero
 			end)
-			task.wait(0.3)
+		end
+		local function rayHit()
+			local rp = RaycastParams.new()
+			rp.FilterType = Enum.RaycastFilterType.Include
+			rp.FilterDescendantsInstances = { belt, render }
+			return workspace:Raycast(h.Position, Vector3.new(0, -8, 0), rp)
 		end
 
-		-- เช็คแบบเดียวกับเกมก่อนยิง  ไม่โดนก็ไม่ต้องเสียคำสั่ง
-		local rp = RaycastParams.new()
-		rp.FilterType = Enum.RaycastFilterType.Include
-		rp.FilterDescendantsInstances = { belt, render }
-		local seen = workspace:Raycast(h.Position, Vector3.new(0, -8, 0), rp)
+		reseat()
+		task.wait(0.15)
+		local seen = rayHit()
+		if not seen then
+			-- โดนพัดออกระหว่างรอ  วางกลับแล้วยิงเรย์ทันทีไม่ต้องรอ
+			reseat()
+			seen = rayHit()
+			Hub.RideReseat = (Hub.RideReseat or 0) + 1
+		end
 		Hub.RideRayHit = seen and seen.Instance.Name or "ไม่โดน"
 		if not seen then
 			Hub.RideRayMiss = (Hub.RideRayMiss or 0) + 1
 		elseif rf and rf:IsA("RemoteFunction") then
-			Hub.pace()
-			local ok, res = pcall(function() return rf:InvokeServer() end)
+			local res = Hub.rq(function() return rf:InvokeServer() end)
+			local ok = res ~= nil
 			Hub.RideEquipRes = tostring(res)
 			if ok and res == true then
 				mountedNow = true
@@ -6123,8 +6344,7 @@ Hub.rideTreadmill = function()
 			-- ปฏิเสธเพราะยังติดของเก่าค้าง ล้างแล้วลองใหม่รอบหน้า
 			local uq = net and net:FindFirstChild(TREAD_UNEQUIP)
 			if uq and uq:IsA("RemoteFunction") then
-				Hub.pace()
-			pcall(function() uq:InvokeServer() end)
+				Hub.rq(function() return uq:InvokeServer() end)
 			end
 		end
 		task.wait(1.3)   -- คูลดาวน์ของเกมคือ 1.25 วิ ยิงถี่กว่านั้นเสียเปล่า
@@ -6293,12 +6513,29 @@ Hub.rideTreadmill = function()
 			local ls2 = LocalPlayer:FindFirstChild("leaderstats")
 			local sv2 = ls2 and ls2:FindFirstChild("Speed")
 			local now = sv2 and tonumber(sv2.Value)
+
+			-- ไถลออกนอกสายพานก็คือหลุดแล้ว ไม่ต้องรอให้ speed นิ่งครบเวลา
+			-- สายพานกว้าง 8.5 ยาว 13.4  ห่างกลางเกิน 5 = ใกล้ตกขอบแล้ว
+			local drifted = false
+			do
+				local _, hc = char()
+				if hc then
+					Hub.RideNowGap = (hc.Position - spot).Magnitude
+					drifted = Hub.RideNowGap > 5
+				end
+			end
+
 			if now then
 				if Hub.RideWatchVal == nil or now > Hub.RideWatchVal then
 					Hub.RideWatchVal, Hub.RideWatchAt = now, os.clock()
-				elseif os.clock() - (Hub.RideWatchAt or 0) >= 12 then
+				end
+				-- speed ขึ้นเป็นก้าวๆ  6 วินาทีไม่ขยับเลยถือว่าหลุดแล้ว
+				-- เดิมตั้ง 12 วิ ซึ่งช้าไป เสีย speed ไปฟรีๆ ครึ่งนาทีต่อรอบ
+				local stalled = os.clock() - (Hub.RideWatchAt or 0) >= 6
+				if stalled or drifted then
 					Hub.RideStalled = (Hub.RideStalled or 0) + 1
-					Hub.Phase = "speed หยุดเดิน - ขึ้นลู่วิ่งใหม่"
+					Hub.Phase = drifted and "ไถลออกจากสายพาน - ขึ้นใหม่"
+						or "speed หยุดเดิน - ขึ้นลู่วิ่งใหม่"
 					if tryMount(2) then
 						Hub.RideRemount = (Hub.RideRemount or 0) + 1
 					end
@@ -6589,8 +6826,8 @@ local function warpCycle()
 						break
 					end
 
-					Hub.pace()
-					local ok = carryF:InvokeServer({ Uid = waitEgg.Uid })
+					local ok = Hub.rq(function(a) return carryF:InvokeServer(a) end,
+						{ Uid = waitEgg.Uid })
 					if ok == true then
 						Stats.stolen += 1
 						log(("ได้ไข่ทันทีที่รีเซ็ตจบ: %s ($%s/s)"):format(
@@ -7534,8 +7771,8 @@ local function cycle()
 			task.wait(1)
 		else
 			move(egg.BottomCFrame.Position + Vector3.new(0, 3, 0))
-			Hub.pace()
-			local ok, msg = carryF:InvokeServer({ Uid = egg.Uid })
+			local ok, msg = Hub.rq(function(a) return carryF:InvokeServer(a) end,
+				{ Uid = egg.Uid })
 			if ok == true then got = egg break end
 			lastMsg = tostring(msg)
 			task.wait(0.5)
@@ -7632,6 +7869,10 @@ local ICON_B64 = table.concat({
 })
 
 local function buildIcon()
+	-- ไม่ได้เปิด UI ก็ไม่ต้องเขียนไฟล์ลงเครื่องลูกค้าเลย
+	-- ลูกค้าส่วนใหญ่รันด้วย ShowUI = false ไอคอนจึงไม่มีใครเห็นอยู่แล้ว
+	-- (ผู้ใช้สั่ง: ไม่ต้องให้มันจำหรือทิ้งอะไรเก่าๆ ไว้บนเครื่อง)
+	if Config.ShowUI == false then return DEFAULT_ICON end
 	if type(writefile) ~= "function" or type(getcustomasset) ~= "function" then
 		return DEFAULT_ICON
 	end
