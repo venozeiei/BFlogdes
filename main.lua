@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "hatchfix-700"
+Hub.Build = "ride-trail-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -590,6 +590,13 @@ local Config = {
 	-- ตอนสนามมีไข่สดให้แย่ง ยังยอมเปิดไข่ได้กี่ใบก่อนจะรีบออกไปเก็บ
 	-- 0 = ไม่เปิดเลยตอนยุ่ง  สูงขึ้น = เปิดครบกว่าแต่ออกไปเก็บช้าลง
 	HatchWhenBusy = 3,
+
+	-- ซื้อ Trail อัตโนมัติ  เอาตัวที่เร่ง speed สูงสุดที่เงินถึง (ดู Hub.buyBestTrail)
+	AutoTrail = true,
+
+	-- เก็บไข่ครบตามโควตาแล้วไปยืนวิ่งบนลูกวิ่งสะสม speed จนใกล้รีเซ็ต
+	-- ออกจากสถานะวิ่งเมื่อเหลือเวลาเท่ากับ PreResetHold แล้วกลับไปยืนจุดกลาง
+	RideTreadmill = true,
 }
 Hub.Config = Config
 
@@ -4080,6 +4087,93 @@ end
 -- ผลคือลูปจบตั้งแต่รอบแรกก่อนจะลองหยิบด้วยซ้ำ got = 0 แล้วนับเป็น failed
 -- แล้ววนใหม่ราว 3 ครั้ง/วินาทีตลอดช่วงที่ธงค้าง
 -- = อาการ "ได้ 33 พลาด 119" โดยที่เซิร์ฟไม่ได้ปฏิเสธสักครั้ง
+--==================================================================
+-- ซื้อ Trail ที่เร่งความเร็วได้มากที่สุดเท่าที่เงินถึง
+--
+-- อ่านข้อมูลจากเกมเอง ไม่ฝังราคาไว้ในโค้ด  เกมปรับราคาเมื่อไหร่เราตามเอง
+--     require(ReplicatedStorage.Directory.Trails).Directory
+--     -> { GreyTrail={Price=100, SpeedMultiplier=1.5}, ... }
+-- ทั้ง 10 ระดับที่อ่านได้จากเกมสด:
+--     Divine x14 300T · Eternal x10 12.5T · Secret x7 500B · Galaxy x5 20B
+--     Red x4 750M · Golden x3.5 30M · Purple x3 1.5M · Blue x2.5 75K
+--     Green x2 5K · Grey x1.5 100
+--
+-- เงินและของที่มีอยู่อ่านจาก Save ของผู้เล่นเอง
+--     Save.Get(player).Money  และ  .TrailInventory
+--
+-- กติกาตามที่เจ้าของสั่ง: ไม่ต้องไล่ซื้อทุกอัน
+-- เอาอันที่ speed สูงสุดที่เงินถึง ณ ตอนนั้น แล้วเก็บเงินซื้ออันสูงกว่าต่อไปเรื่อยๆ
+Hub.buyBestTrail = function(force)
+	if Config.AutoTrail == false then return false end
+	if not force and os.clock() - (Hub.TrailAt or -1e9) < 60 then return false end
+	Hub.TrailAt = os.clock()
+
+	local okD, D = pcall(function() return require(ReplicatedStorage.Directory.Trails).Directory end)
+	if not okD or type(D) ~= "table" then return false end
+	local okS, Save = pcall(function() return require(ReplicatedStorage.Library.Client.Save) end)
+	if not okS then return false end
+	local okG, data = pcall(function() return Save.Get(LocalPlayer) end)
+	if not okG or type(data) ~= "table" then return false end
+
+	local cash = tonumber(data.Money) or 0
+	Hub.TrailMoney = cash
+	local inv = data.TrailInventory
+
+	-- TrailInventory อาจเป็นแบบ { GreenTrail = true } หรือ { "GreenTrail" }
+	-- รองรับทั้งสองแบบ ไม่ต้องเดา
+	local function owns(id)
+		if type(inv) ~= "table" then return false end
+		if inv[id] ~= nil and inv[id] ~= false then return true end
+		for _, v in pairs(inv) do if tostring(v) == id then return true end end
+		return false
+	end
+
+	-- เอาตัวที่ speed สูงสุดที่ยังไม่มีและเงินถึง
+	local best, bestSpeed, bestPrice = nil, -1, 0
+	-- และจำตัวที่ speed สูงสุดที่ "มีอยู่แล้ว" ไว้ใส่ให้ถูกตัว
+	local ownedBest, ownedSpeed = nil, -1
+	for id, t in pairs(D) do
+		if type(t) == "table" and t.Price ~= nil then
+			local price = tonumber(t.Price) or math.huge
+			local sp = tonumber(t.SpeedMultiplier) or 0
+			if owns(id) then
+				if sp > ownedSpeed then ownedBest, ownedSpeed = id, sp end
+			elseif price <= cash and sp > bestSpeed then
+				best, bestSpeed, bestPrice = id, sp, price
+			end
+		end
+	end
+
+	if best then
+		local rf = ReplicatedStorage.Network:FindFirstChild("Trails: RequestPurchase")
+		if rf and rf:IsA("RemoteFunction") then
+			local ok, res = pcall(function() return rf:InvokeServer(best) end)
+			if ok and res ~= false then
+				Hub.TrailBought = (Hub.TrailBought or 0) + 1
+				Hub.LastTrail = best
+				log(("ซื้อ %s (x%s speed) ราคา %s"):format(best, tostring(bestSpeed), tostring(bestPrice)))
+				if bestSpeed > ownedSpeed then ownedBest, ownedSpeed = best, bestSpeed end
+			else
+				Hub.TrailBuyFail = (Hub.TrailBuyFail or 0) + 1
+				Hub.TrailBuyMsg = tostring(res)
+			end
+		end
+	end
+
+	-- ใส่ตัวที่ดีที่สุดที่มีเสมอ  ซื้อแล้วไม่ใส่ก็ไม่ได้ speed
+	if ownedBest and Hub.TrailWorn ~= ownedBest then
+		local sel = ReplicatedStorage.Network:FindFirstChild("Trails: RequestSelect")
+		if sel and sel:IsA("RemoteFunction") then
+			local ok = pcall(function() return sel:InvokeServer(ownedBest) end)
+			if ok then
+				Hub.TrailWorn = ownedBest
+				log(("ใส่ %s (x%s speed)"):format(ownedBest, tostring(ownedSpeed)))
+			end
+		end
+	end
+	return best ~= nil
+end
+
 Hub.resetWindow = function()
 	if not (Hub.BoxUp or isResetting()) then return false end
 	local left = Hub.nightIn() or secondsToReset()
@@ -5385,6 +5479,69 @@ local function baseNeedsWork()
 	return false
 end
 
+--==================================================================
+-- ไปยืนวิ่งบนลูกวิ่งระหว่างรอไข่รอบใหม่
+--
+-- ตามที่เจ้าของสั่ง: หลังรีเซ็ตเก็บแค่ 5 ฟองพอ แล้วไปยืนวิ่งสะสม speed
+-- พอเหลือ 20 วินาทีก่อนรีเซ็ตค่อยออกจากสถานะวิ่ง กลับไปยืนจุดกลางรอเก็บไข่
+--
+-- ทำไมคุ้ม: leaderstats.Speed เพิ่มขึ้นตลอดเวลาที่อยู่บนลูกวิ่ง
+-- และ speed ที่สูงขึ้นทำให้เพดานที่เซิร์ฟยอมให้ (WalkSpeed*1.1+8) สูงตาม
+-- เวลาที่เหลือหลังเก็บครบ 5 ฟองไม่ได้ใช้ทำอะไรอยู่แล้ว
+--
+-- ออกจากสถานะด้วย Treadmills: RequestUnequip (ดู Hub.clearTreadmillState)
+-- ห้ามใช้การกระโดด  UserInputService.JumpRequest ยิงจากอินพุตจริงเท่านั้น
+Hub.rideTreadmill = function()
+	if Config.RideTreadmill == false then return false end
+
+	-- หาสายพานของแปลงเรา
+	local plot = myPlot()
+	local belt = plot and plot:FindFirstChild("TreadmillBottom")
+	if not belt or not belt:IsA("BasePart") then
+		Hub.RideNoBelt = (Hub.RideNoBelt or 0) + 1
+		return false
+	end
+
+	-- ฝ่าเท้าต้องแตะระนาบสายพาน เซิร์ฟถึงจะนับว่าขึ้นลูกวิ่ง
+	-- วัดจากเกม: สายพานเป็นแผ่นบางที่ y 67.6767 · HRP ตอนยืนอยู่ที่ 70.673
+	local spot = belt.Position + Vector3.new(0, 3.1, 0)
+	if not move(spot) then return false end
+
+	local leaveAt = tonumber(Config.PreResetHold) or 20
+	local t0 = os.clock()
+	Hub.RideStarted = (Hub.RideStarted or 0) + 1
+
+	while Config.Running and alive() do
+		local left = Hub.nightIn() or secondsToReset()
+		-- เหลือน้อยกว่าที่ตั้งไว้ = ถึงเวลาออก
+		if left ~= nil and left <= leaveAt then break end
+		-- อ่านเวลาไม่ได้เลย อย่าค้างอยู่ตลอดกาล
+		if left == nil and os.clock() - t0 > 240 then break end
+		-- กล่องขึ้นจริงก็ออก
+		if Hub.resetWindow() then break end
+
+		-- ยืนอยู่กับที่บนสายพาน  ไม่ต้องเขียน CFrame รัวๆ
+		-- ถ้าหลุดออกไปไกลค่อยดึงกลับ
+		local _, h = char()
+		if h and (h.Position - spot).Magnitude > 12 then move(spot) end
+		Hub.Phase = ("ยืนวิ่งสะสม speed - รีเซ็ตอีก %s วิ")
+			:format(left and math.floor(left) or "?")
+		task.wait(1)
+	end
+
+	-- ออกจากสถานะวิ่งก่อนกลับ ไม่งั้นเก็บไข่ไม่ติด
+	-- (ระหว่างติดสถานะ เกมถอด Tool ออกจากตัวทันทีที่ใส่เข้ามา)
+	Hub.Phase = "ออกจากลูกวิ่ง - กลับไปรอที่จุดกลาง"
+	for _ = 1, 3 do
+		if not Hub.treadmillStuck() then break end
+		pcall(Hub.clearTreadmillState)
+		task.wait(0.3)
+	end
+	Hub.RideEnded = (Hub.RideEnded or 0) + 1
+	move(warpHome)
+	return true
+end
+
 local function warpCycle()
 	if not waitForRespawn() then
 		enteredZone = false
@@ -6122,6 +6279,20 @@ local function warpCycle()
 		-- กลับจุดยืนแล้วค่อยจัดการฐานทีเดียว
 		Hub.Phase = "วาปกลับกลาง SAFE ZONE"
 		move(warpHome)
+
+		-- เก็บครบโควตาแล้ว ไปยืนวิ่งสะสม speed จนใกล้รีเซ็ต (ดู Hub.rideTreadmill)
+		--
+		-- ทำหลังฝากไข่และก่อนงานบ้าน  ตัวมันเองจะออกมาเองเมื่อเหลือเวลาเท่า PreResetHold
+		-- และปลดสถานะวิ่งให้เรียบร้อยก่อนกลับ ไม่งั้นรอบหน้าเก็บไข่ไม่ติด
+		-- ต้องมีเวลาเหลือมากพอถึงจะคุ้มไป ไม่งั้นวิ่งไปกลับเปล่าๆ
+		if Config.RideTreadmill ~= false and got > 0 then
+			local left = Hub.nightIn() or secondsToReset()
+			local need = (tonumber(Config.PreResetHold) or 20) + 30
+			if left ~= nil and left > need then
+				pcall(Hub.buyBestTrail)      -- มีเงินพอก็อัป trail ตอนนี้เลย
+				pcall(Hub.rideTreadmill)
+			end
+		end
 
 		if got > 0 then
 			-- จัดคอกให้ดีที่สุดทุกรอบ
