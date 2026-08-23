@@ -92,7 +92,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "approach-700"
+Hub.Build = "back14-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -614,6 +614,17 @@ local Config = {
 
 	-- ความเร็วช่วงชะลอ  0 = คิดเองจากเพดานที่กฎยอมให้ (WalkSpeed*1.1+8)
 	ApproachSpeed = 0,
+
+	-- ต้องวิ่งช้ามาแล้วกี่วินาทีก่อนถึงจะยอมยิงคำสั่งหยิบ  0 = ไม่บังคับ
+	--
+	-- ปิดไว้  วัดแล้วทำให้แย่ลงชัดเจน ไม่ใช่ดีขึ้น
+	-- ตั้ง 0.35 แล้ววัด 200 วินาที: เก็บได้ 0 · ปุ่มไม่ได้ยิงเลยสักครั้ง
+	-- (ก่อนหน้านั้นที่ปิดไว้ได้ 14 ฟอง ยิงปุ่ม 21 ครั้ง สำเร็จ 67%)
+	-- ลูปรอวนจนหมดเวลา 2 วินาทีทุกใบ แล้วกินเวลาทั้งรอบไปหมด
+	SlowBeforeGrab = 0,
+
+	-- ต้องเข้าใกล้ไข่ไม่เกินกี่ studs ก่อนยิง  (ปุ่มเกมยอมให้กดที่ 8)
+	GrabRadius = 8,
 }
 Hub.Config = Config
 
@@ -2879,9 +2890,22 @@ end
 -- fireproximityprompt ยิงผ่านได้ทันทีโดยไม่ต้องกดค้างครบ 1.2 วินาที
 --
 -- ต้องมี fireproximityprompt  ถ้าตัวรันไม่มีก็ถอยไปใช้รีโมทเหมือนเดิม
-Hub.grabPrompt = function(maxDist)
+-- ต้องส่งตำแหน่งของไข่เป้าหมายเข้ามาด้วยเสมอ
+--
+-- ปุ่มไม่มี attribute ผูกกับ Uid เลย (probe สด: attrs ว่างทั้งที่ part และที่ prompt)
+-- จึงจับคู่ได้ทางเดียวคือเทียบตำแหน่ง
+--
+-- ห้ามเลือก "ปุ่มที่ใกล้ตัวเราที่สุด" เด็ดขาด
+-- ในสนามไข่วางชิดกัน พอไปถึงใบแพง ถ้ามีใบถูกอยู่ใกล้กว่านิดเดียวจะกดของใบถูกแทน
+-- อาการที่เห็น: "เหมือนมันเก็บไข่รอบตัวมากกว่า ไม่ได้ดึงใบที่ดีที่สุด"
+-- ซึ่งขัดกับกฎเหล็กเรื่องเก็บใบแพงสุดก่อน
+Hub.grabPrompt = function(eggPos, maxDist)
 	if type(fireproximityprompt) ~= "function" then
 		Hub.PromptSkipped = "ตัวรันไม่มี fireproximityprompt"
+		return false
+	end
+	if typeof(eggPos) ~= "Vector3" then
+		Hub.PromptNoTarget = (Hub.PromptNoTarget or 0) + 1
 		return false
 	end
 	local c = LocalPlayer.Character
@@ -2889,22 +2913,32 @@ Hub.grabPrompt = function(maxDist)
 	if not h then return false end
 
 	-- ไล่เฉพาะลูกตรงของ workspace ที่ชื่อ SmartPromptPart  ไม่ได้ไล่ทั้งฉาก
+	-- เลือกตัวที่ใกล้ "ไข่เป้าหมาย" ที่สุด ไม่ใช่ใกล้ตัวเรา
 	local best, bd = nil, math.huge
 	for _, d in ipairs(workspace:GetChildren()) do
 		if d.Name == "SmartPromptPart" and d:IsA("BasePart") then
 			local pr = d:FindFirstChild("CarryAreaEgg")
 			if pr and pr.Enabled then
-				local dist = (d.Position - h.Position).Magnitude
+				local dist = (d.Position - eggPos).Magnitude
 				if dist < bd then bd, best = dist, pr end
 			end
 		end
 	end
 	if not best then return false end
 
+	-- ต้องเป็นปุ่มของใบนั้นจริงๆ  ห่างจากไข่เกิน 6 studs = คนละใบ ไม่กด
+	if bd > 6 then
+		Hub.PromptWrongEgg = (Hub.PromptWrongEgg or 0) + 1
+		Hub.PromptEggGap = bd
+		return false
+	end
+
+	-- และตัวเราต้องอยู่ในระยะที่ปุ่มยอมให้กดด้วย
+	local me = (best.Parent.Position - h.Position).Magnitude
 	local lim = tonumber(maxDist) or best.MaxActivationDistance or 8
-	if bd > lim then
+	if me > lim then
 		Hub.PromptTooFar = (Hub.PromptTooFar or 0) + 1
-		Hub.PromptDist = bd
+		Hub.PromptDist = me
 		return false
 	end
 
@@ -2914,22 +2948,41 @@ Hub.grabPrompt = function(maxDist)
 end
 
 -- ถือไข่อยู่หรือยัง  ใช้เช็คว่าการกดปุ่มสำเร็จจริงไหม
--- ถือไข่อยู่หรือยัง
+-- ถือไข่จากสนามอยู่หรือยัง  ต้องอ่านจากสัญญาณของเกมเท่านั้น
 --
--- เช็คจาก Tool ในตัวละครตรงๆ  ไข่ที่แบกอยู่เป็น Tool จริง
--- (probe สด: Character มี Tool ชื่อ "Cosmic Gecko Egg" ตอนกำลังแบก)
+-- ห้ามเช็คจาก "มี Tool ในตัวไหม" เด็ดขาด
+-- เคยทำแล้วผิด: ตัวละครถือ gear หรือถือสัตว์ไปวางแปลงก็เป็น Tool เหมือนกัน
+-- (probe สด: กระเป๋ามี Tool ชื่อ Leviathan / Orca ที่มี ItemType=Asset)
+-- ผลคือรายงาน "เก็บไข่สำเร็จ" ทั้งที่ไม่ได้ไข่เลย แล้วสถิติทั้งชุดกลายเป็นของปลอม
 --
--- ห้ามใช้ EggCmds.GetAreaEggCarryState  ฟังก์ชันนั้นไม่มีอยู่จริง
+-- ห้ามใช้ EggCmds.GetAreaEggCarryState ด้วย  ฟังก์ชันนั้นไม่มีอยู่จริงในเกม
 -- EggCmds มีแค่ AreaEggCarryStateChanged (สัญญาณ) กับ RequestCarryAreaEgg
--- ของเดิมเรียกตัวที่ไม่มี เลยคืน nil ตลอด แปลว่า "ไม่ได้ถือ" ทุกครั้ง
--- ผลคือปุ่มเก็บไข่สำเร็จแต่เราไม่รู้ตัว แล้วยิงรีโมทซ้ำจนได้ "Already carrying an egg"
--- แล้วนับเป็นล้มเหลว  ไข่ที่ถืออยู่จึงไม่เคยถูกพาไปฝาก
+--
+-- ของจริงคือ RemoteEvent "Eggs: AreaEggCarryState" ที่เซิร์ฟยิงมาบอกทุกครั้งที่
+-- สถานะเปลี่ยน  payload เป็นตารางตาม Library.Types.AreaEggs:
+--     { IsCarrying, Uid, AreaId, AssetCategory, RunBackWakeDelayRequired, SpeedMultiplier }
+Hub.watchCarry = function()
+	if Hub.CarryHooked then return true end
+	local net = ReplicatedStorage:FindFirstChild("Network")
+	local ev = net and net:FindFirstChild("Eggs: AreaEggCarryState")
+	if not ev or not ev:IsA("RemoteEvent") then return false end
+	ev.OnClientEvent:Connect(function(st)
+		if type(st) == "table" then
+			Hub.CarryOn = st.IsCarrying == true
+			Hub.CarryUid = st.Uid
+			Hub.CarryAt = os.clock()
+			Hub.CarryEvents = (Hub.CarryEvents or 0) + 1
+		else
+			Hub.CarryOn = false
+			Hub.CarryUid = nil
+		end
+	end)
+	Hub.CarryHooked = true
+	return true
+end
+
 Hub.isCarrying = function()
-	local c = LocalPlayer.Character
-	if not c then return false end
-	local t = c:FindFirstChildOfClass("Tool")
-	if t then return true, t.Name end
-	return false
+	return Hub.CarryOn == true, Hub.CarryUid
 end
 
 Hub.armImpulse = function(hrp)
@@ -3226,9 +3279,12 @@ Hub.glide = function(hrp, hum, dest)
 				end
 			end
 			useSpeed = math.min(speed, math.max(12, legal))
+			-- จำว่าเริ่มวิ่งช้าตั้งแต่เมื่อไหร่  ตัวหยิบไข่ใช้ตรวจว่าช้ามานานพอหรือยัง
+			if not Hub.Approaching then Hub.SlowSince = os.clock() end
 			Hub.Approaching = true
 		else
 			Hub.Approaching = false
+			Hub.SlowSince = nil
 		end
 
 		local capPerFrame = useSpeed * math.min(dt, 0.05)
@@ -4289,7 +4345,30 @@ local function findEgg(area)
 	return best and best.rec, best and best.rate
 end
 
+-- ยังถือไข่อยู่ไหม
+--
+-- ใช้สัญญาณจากเกมเป็นหลัก  RemoteEvent "Eggs: AreaEggCarryState" ที่เซิร์ฟยิงมาเอง
+-- ทุกครั้งที่สถานะเปลี่ยน (ดู Hub.watchCarry) อ่านจากตัวแปรในเครื่อง ไม่มีการยิงเซิร์ฟเลย
+--
+-- ของเดิมสแกน snapshot() หาว่า CarrierUserId ตรงกับเราไหม
+-- ซึ่ง snapshot() ยิง InvokeServer ทุกครั้งที่แคชหมดอายุ ราว 230ms ต่อครั้ง
+-- แล้วลูปฝากไข่เรียกมันทุก 0.08 วินาทีพร้อม clearSnapCacheFwd()
+-- = ยิงเซิร์ฟราว 4 ครั้ง/วินาทีตลอดการฝาก และแต่ละครั้งหยุดรอ
+-- ระหว่างนั้นลูปยังเขียน CFrame ตรึงตัวไปด้วย ทำให้จังหวะการเคลื่อนที่สะดุดเป็นช่วงๆ
+--
+-- อาการที่เห็น: กลับถึงเซฟโซนแล้วไม่ยอมฝาก รอบถัดไปเจอ "Already carrying an egg"
+-- (ผู้ใช้รายงานพร้อมสถิติ ได้ 33 พลาด 119)
 local function carriedByMe()
+	-- เคยเปลี่ยนมาอ่านจากสัญญาณ Hub.CarryOn แทน  วัดแล้วแย่ลงชัดเจน ย้อนกลับแล้ว
+	--
+	-- วัดเทียบ 200 วินาที ตัวแปรเดียว:
+	--     snapshot (ของเดิม) -> ได้ 14 ฟอง · ปุ่มสำเร็จ 67%
+	--     สัญญาณ CarryOn      -> ได้  6 ฟอง · ปุ่มสำเร็จ 42% · ฝากช้า 3 ครั้ง
+	-- สัญญาณรับมาแค่ 9 ครั้งต่อการเก็บ 6 ฟอง ทั้งที่ควรได้ราวสองเท่าของจำนวนฟอง
+	-- แปลว่ามันไม่ได้ยิงครบทุกกรณี หรือมาช้ากว่าที่ snapshot รู้
+	--
+	-- Hub.CarryOn ยังใช้ได้ดีสำหรับ "ยืนยันว่าปุ่มเก็บสำเร็จ" (Hub.isCarrying)
+	-- แต่ใช้เป็นตัวตัดสินการฝากไม่ได้  สองงานนี้ต้องการความแม่นคนละแบบ
 	for _, r in pairs(snapshot()) do
 		if tostring(r.CarrierUserId) == tostring(LocalPlayer.UserId) then return r end
 	end
@@ -5726,6 +5805,35 @@ local function warpCycle()
 			if fieldIsFresh() or Hub.BoxUp then Hub.pinAt(eggPos, 2) end
 			-- โดนดีดกลับระหว่างทางไหม ถ้าใช่วาปกลับไปก่อนค่อยยิง
 			Hub.atEggOrRewarp(eggPos, function() return move(eggPos) end)
+			-- ห้ามยิงหยิบจนกว่าจะ "ถึงจริง" และ "วิ่งช้ามานานพอ"
+			--
+			-- atEggOrRewarp ยอมรับที่ระยะ 30 studs ซึ่งอยู่ในเขตชะลอ (ApproachDist 40) พอดี
+			-- ยิงตอนนั้นคือยิงตั้งแต่เพิ่งเริ่มชะลอ เซิร์ฟยังเห็นแต่ตัวอย่างความเร็วสูงอยู่
+			-- แล้วตอบ "Movement is not currently trusted" = เสียทั้งเที่ยว
+			--
+			-- การชะลอได้ผลก็ต่อเมื่อวิ่งช้าจริงติดกันหลายเฟรมก่อนขอหยิบ
+			-- (ยืนนิ่งไม่ช่วย วัดแล้ว 0 สำเร็จจาก 24 ครั้ง เพราะไม่ได้สร้างตัวอย่างใหม่)
+			do
+				local needSlow = tonumber(Config.SlowBeforeGrab) or 0.35
+				local grabR = tonumber(Config.GrabRadius) or 8
+				local gt0 = os.clock()
+				while os.clock() - gt0 < 2 do
+					local _, gh = char()
+					if not gh then break end
+					local gap = (gh.Position - eggPos).Magnitude
+					local slowOk = needSlow <= 0
+						or (Hub.SlowSince ~= nil and os.clock() - Hub.SlowSince >= needSlow)
+					if gap <= grabR and slowOk then break end
+					if gap > grabR then
+						if not move(eggPos) then break end
+					else
+						-- ถึงแล้วแต่ยังช้าไม่นานพอ  ขยับสั้นๆ แบบถูกกฎให้เซิร์ฟเห็น
+						Hub.NudgeCount = (Hub.NudgeCount or 0) + 1
+						move(eggPos + Vector3.new(3, 0, 0))
+						move(eggPos)
+					end
+				end
+			end
 
 			-- ลองกดปุ่มของเกมก่อนเสมอ (ดู Hub.grabPrompt)
 			--
@@ -5733,7 +5841,7 @@ local function warpCycle()
 			-- ซึ่งเป็นทางเดียวที่ยังไม่เคยลอง และเป็นทางที่ผู้เล่นจริงใช้
 			-- fireproximityprompt ยิงผ่านทันที ไม่ต้องกดค้างครบ 1.2 วินาที
 			local ok, msg
-			if Config.UsePrompt ~= false and Hub.grabPrompt() then
+			if Config.UsePrompt ~= false and Hub.grabPrompt(eggPos) then
 				-- ต้องรอให้อีเวนต์สถานะถือไข่วิ่งมาถึงก่อน  ห้ามเช็คแค่เฟรมเดียว
 				--
 				-- เคยเช็คเฟรมเดียวแล้วพลาด: ปุ่มเก็บไข่ได้จริง แต่ Eggs: AreaEggCarryState
@@ -7465,6 +7573,9 @@ pcall(Hub.watchNetwork)
 -- ต่อสัญญาณลูกวิ่งทันที ห้ามรอ StartupGrace
 -- ถ้าต่อช้ากว่าครั้งแรกที่เกมยิงมา เราจะพลาดครั้งนั้นแล้วติดสถานะค้างโดยไม่รู้ตัว
 pcall(Hub.watchTreadmill)
+
+-- ต่อสัญญาณสถานะถือไข่ทันทีเช่นกัน  ต่อช้าคือพลาดครั้งแรกแล้วนับผิดทั้งรอบ
+pcall(Hub.watchCarry)
 
 task.spawn(function()
 	waitSettled(tonumber(Config.StartupGrace) or 15)
