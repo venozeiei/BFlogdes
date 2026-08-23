@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "preclear-700"
+Hub.Build = "runlong-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -4186,6 +4186,10 @@ local function noteFieldReset()
 			-- จับเวลาไว้ดูว่า 6 วินาทีที่ช้าอยู่ เสียไปกับรอไข่โผล่ หรือรอเราตัดสินใจ
 			Hub.ResetSeenAt = os.clock()
 			Hub.GapEggSeen, Hub.GapFirstGrab = nil, nil
+			-- ไข่ชุดใหม่มาแล้ว ปลดล็อกให้ออกไปเก็บได้อีกรอบ
+			-- ธงนี้ตั้งตอนวิ่งจบ เพื่อกันไม่ให้ออกไปเก็บรอบสองก่อนไข่รีเซ็ต
+			Hub.RideDoneAt = nil
+			Hub.RideHatched = nil
 			log("สนามรีเซ็ตแล้ว - รอให้เซิร์ฟพร้อมก่อน")
 		end
 		lastLeftSeen = left
@@ -5973,7 +5977,6 @@ Hub.rideTreadmill = function()
 	-- ยิงสั่งขึ้น  ลองซ้ำได้ตามคูลดาวน์ของเกมเอง
 	local net = ReplicatedStorage:FindFirstChild("Network")
 	local rf = net and net:FindFirstChild(TREAD_EQUIP)
-	local mounted = false
 
 	-- ติดสถานะเก่าค้างอยู่ต้องล้างก่อน ไม่งั้นขึ้นใหม่ไม่ได้
 	--
@@ -5995,7 +5998,15 @@ Hub.rideTreadmill = function()
 			task.wait(0.3)
 		end
 	end
-	for try = 1, 4 do
+	-- ห่อเป็นฟังก์ชันไว้เรียกซ้ำระหว่างยืนวิ่งได้ด้วย
+	--
+	-- บางครั้งขึ้นได้แล้ววิ่งไปสักพักเซิร์ฟตัดสถานะเราออกเอง แล้ว speed หยุดเดิน
+	-- ตัวละครยังยืนอยู่ที่เดิม เลยดูเหมือนวิ่งอยู่แต่ไม่ได้อะไรเลย
+	-- (ผู้ใช้เจอ: "บางทีมันขึ้นวิ่งแล้วนะ แต่พอไปสักพักมันไม่ได้วิ่ง")
+	-- ให้ลูปยืนวิ่งเรียกตัวนี้ซ้ำเองเมื่อจับได้ว่า speed ไม่เดินแล้ว
+	local function tryMount(rounds)
+	local mountedNow = false
+	for try = 1, (rounds or 4) do
 		local _, h = char()
 		if not h then break end
 
@@ -6020,7 +6031,7 @@ Hub.rideTreadmill = function()
 			local ok, res = pcall(function() return rf:InvokeServer() end)
 			Hub.RideEquipRes = tostring(res)
 			if ok and res == true then
-				mounted = true
+				mountedNow = true
 				Hub.RideOnBelt = (Hub.RideOnBelt or 0) + 1
 				break
 			end
@@ -6028,7 +6039,7 @@ Hub.rideTreadmill = function()
 
 			-- เซิร์ฟปฏิเสธแต่เราติดสถานะอยู่แล้ว = ขึ้นอยู่แล้ว ถือว่าสำเร็จ
 			if Hub.TreadmillActive == true then
-				mounted = true
+				mountedNow = true
 				Hub.RideAlready = (Hub.RideAlready or 0) + 1
 				Hub.RideOnBelt = (Hub.RideOnBelt or 0) + 1
 				break
@@ -6042,6 +6053,10 @@ Hub.rideTreadmill = function()
 		end
 		task.wait(1.3)   -- คูลดาวน์ของเกมคือ 1.25 วิ ยิงถี่กว่านั้นเสียเปล่า
 	end
+	return mountedNow
+	end
+
+	local mounted = tryMount(4)
 	if not mounted then
 		Hub.RideNoMount = (Hub.RideNoMount or 0) + 1
 	end
@@ -6186,6 +6201,36 @@ Hub.rideTreadmill = function()
 		-- มาตัดสินว่าหลุดจึงผิดเสมอ  ทางที่ถูกคือไม่ตัดสินอะไรเลย
 		--
 		-- ออกทางเดียวคือถึงเวลารีเซ็ต ซึ่งเช็คที่หัวลูปแล้ว
+		-- speed หยุดเดิน = หลุดจากแท่นแล้ว  ขึ้นใหม่ทันทีตรงนั้น
+		--
+		-- เซิร์ฟตัดสถานะเราออกเองได้ระหว่างวิ่ง ตัวละครยังยืนที่เดิมไม่ขยับ
+		-- เลยดูเหมือนวิ่งอยู่แต่ไม่ได้ speed เลยจนหมดรอบ
+		-- (ผู้ใช้เจอ: "บางทีมันขึ้นวิ่งแล้วนะ แต่พอไปสักพักมันไม่ได้วิ่ง")
+		--
+		-- ห้ามใช้ธง TreadmillActive ตัดสิน  วัดแล้วว่าโกหกทั้งสองทาง
+		-- ตัวที่โกหกไม่ได้คือ leaderstats.Speed
+		--
+		-- speed ขึ้นเป็นก้าวๆ ไม่ได้ขึ้นทุกวินาที จึงต้องให้เวลาพอสมควรก่อนตัดสิน
+		-- ลู่วิ่งช้าสุด (Treadmill x2) ให้ราว 8 หน่วยทุก ~1 วินาที
+		-- 12 วินาทีไม่ขยับเลย = หลุดแน่นอน ไม่ใช่แค่จังหวะเว้น
+		do
+			local ls2 = LocalPlayer:FindFirstChild("leaderstats")
+			local sv2 = ls2 and ls2:FindFirstChild("Speed")
+			local now = sv2 and tonumber(sv2.Value)
+			if now then
+				if Hub.RideWatchVal == nil or now > Hub.RideWatchVal then
+					Hub.RideWatchVal, Hub.RideWatchAt = now, os.clock()
+				elseif os.clock() - (Hub.RideWatchAt or 0) >= 12 then
+					Hub.RideStalled = (Hub.RideStalled or 0) + 1
+					Hub.Phase = "speed หยุดเดิน - ขึ้นลู่วิ่งใหม่"
+					if tryMount(2) then
+						Hub.RideRemount = (Hub.RideRemount or 0) + 1
+					end
+					Hub.RideWatchVal, Hub.RideWatchAt = nil, os.clock()
+				end
+			end
+		end
+
 		-- ฟักไข่ที่พร้อมแล้วระหว่างยืนวิ่ง  ไม่ต้องลงจากลู่วิ่ง
 		--
 		-- การฟักยิงรีโมทล้วน ไม่ต้องเข้าแปลง ไม่ต้องเดินไปไหน
@@ -6537,6 +6582,26 @@ local function warpCycle()
 	if resetStillSettling() then
 		Hub.Phase = "รีเซ็ตเสร็จ - รอเซิร์ฟพร้อม"
 		task.wait(0.2)
+		return nil
+	end
+
+	-- วิ่งจบรอบนี้แล้ว ห้ามออกไปเก็บไข่อีกจนกว่าไข่จะรีเซ็ต
+	--
+	-- วงจรที่ต้องการ: เก็บ top5 ครั้งเดียว -> ทำงานฐาน -> วิ่งยาว -> รอจุดกลาง
+	-- ตัวยืนวิ่งออกมาเองตอนเหลือ 20 วิ ซึ่งคือเวลาที่ต้องไปยืนรอจุดกลางพอดี
+	-- ถ้าปล่อยให้ออกไปเก็บตอนนั้นจะไปไม่ทันแล้วเสียจังหวะไข่ชุดใหม่
+	-- (ผู้ใช้สั่ง: "ไม่ต้องวาปไปเก็บไข่รอบ 2 หลังจากวิ่งแล้ววิ่งยาวเลย")
+	--
+	-- noteFieldReset() ด้านบนเป็นตัวล้างธงนี้เมื่อไข่ชุดใหม่มาถึงจริง
+	-- ตาข่ายกันธงค้าง  ถ้าตัวนับไม่เด้งเลยเกิน 5 นาทีให้ปลดเอง
+	-- ไม่งั้นถ้า noteFieldReset จับการรีเซ็ตไม่ได้สักครั้ง เราจะไม่เก็บไข่อีกเลย
+	if Hub.RideDoneAt and os.clock() - Hub.RideDoneAt > 300 then
+		Hub.RideDoneAt = nil
+		Hub.RideGateStuck = (Hub.RideGateStuck or 0) + 1
+	end
+	if Hub.RideDoneAt then
+		Hub.Phase = "วิ่งครบรอบแล้ว - ยืนรอไข่ชุดใหม่"
+		task.wait(0.5)
 		return nil
 	end
 
@@ -7223,6 +7288,12 @@ local function warpCycle()
 				Hub.RideTryNeed = need
 				if left ~= nil and left > need then
 					pcall(Hub.rideTreadmill)
+					-- วิ่งจบแล้วห้ามออกไปเก็บไข่อีกจนกว่าไข่จะรีเซ็ต
+					--
+					-- รอบหนึ่งเก็บแค่ top5 ครั้งเดียว แล้ววิ่งยาวจนใกล้กลางคืน
+					-- ตัวยืนวิ่งออกมาเองตอนเหลือ 20 วิ ซึ่งเป็นเวลาที่ต้องไปรอจุดกลางพอดี
+					-- ไม่ใช่เวลาที่จะออกไปเก็บรอบสอง (ผู้ใช้สั่ง: "ไม่ต้องวาปไปเก็บไข่รอบ 2")
+					Hub.RideDoneAt = os.clock()
 				else
 					-- ไม่คุ้มไป จดไว้ว่าเพราะอะไร จะได้ไม่ต้องเดา
 					Hub.RideSkip = (Hub.RideSkip or 0) + 1
