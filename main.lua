@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "tmname-700"
+Hub.Build = "ridestay-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -5705,9 +5705,17 @@ Hub.rideTreadmill = function()
 	-- myPlot() คืน (โมเดลแปลง, หมายเลขแปลง) อยู่แล้ว และมีแคช 15 วินาที
 	-- มันถาม Plots: RequestState -> OwnersBySlot เทียบกับ UserId ของเราเอง
 	-- ใช้ของเดิม อย่าเขียนตัวหาแปลงซ้ำอีกตัว
-	local plot, slot = myPlot()
+	-- เพิ่งเข้าเซิร์ฟใหม่ ข้อมูลแปลงยังไม่มา  ลองซ้ำก่อนยอมแพ้
+	-- ของเดิมยอมแพ้ทันทีครั้งเดียว ทำให้รอบแรกๆ หลังรีจอยไม่ได้ขึ้นลู่วิ่งเลย
+	local plot, slot
+	for _ = 1, 5 do
+		plot, slot = myPlot()
+		if plot and slot then break end
+		task.wait(0.5)
+	end
 	if not plot or not slot then
 		Hub.RideNoSlot = (Hub.RideNoSlot or 0) + 1
+		Hub.RideBail = "หาแปลงไม่เจอ"
 		return false
 	end
 	Hub.RideSlotUsed = slot
@@ -5730,7 +5738,20 @@ Hub.rideTreadmill = function()
 		end
 	end
 	if not belt then
+		-- กล่องเรนเดอร์ยังไม่ถูกสร้าง (เพิ่งเข้าเซิร์ฟ / ยังไม่เคยเข้าใกล้)  ลองซ้ำ
+		for _ = 1, 6 do
+			task.wait(0.5)
+			local folder = workspace:FindFirstChild("__ClientTreadmillRenders")
+			local r = folder and folder:FindFirstChild("TreadmillRender_" .. slot)
+			local bb = r and r:FindFirstChild("BoundingBoxPart")
+			if bb and bb:IsA("BasePart") then belt, spotOverride = bb, bb.Position break end
+			local tb = plot:FindFirstChild("TreadmillBottom")
+			if tb and tb:IsA("BasePart") then belt = tb break end
+		end
+	end
+	if not belt then
 		Hub.RideNoBelt = (Hub.RideNoBelt or 0) + 1
+		Hub.RideBail = "ไม่เจอสายพาน"
 		return false
 	end
 
@@ -5745,7 +5766,19 @@ Hub.rideTreadmill = function()
 	-- จึงต้องวาง HRP ที่ผิวสายพาน + 3.09
 	-- ใช้จุดกึ่งกลางกล่องเรนเดอร์ตรงๆ  ถ้าถอยไปใช้สายพานค่อยบวกความสูงเอง
 	local spot = spotOverride or (belt.Position + Vector3.new(0, 3.09, 0))
-	if not move(spot) then return false end
+
+	-- ไปไม่ถึงครั้งแรกไม่ใช่เหตุให้ยกเลิกทั้งรอบ
+	-- (ผู้ใช้เจอ: "พอจะไปวิ่งละมันก็ออก" หลังเข้าเซิร์ฟใหม่)
+	local arrived = false
+	for _ = 1, 3 do
+		if move(spot) then arrived = true break end
+		task.wait(0.3)
+	end
+	if not arrived then
+		Hub.RideMoveFail = (Hub.RideMoveFail or 0) + 1
+		Hub.RideBail = "เดินทางไปไม่ถึง"
+		return false
+	end
 
 	-- ขยับให้ตรงกลางเป๊ะอีกที  ระยะที่เหลือไม่เกิน 6 studs = ก้าวเดียวถูกกฎ
 	for _ = 1, 20 do
@@ -5775,14 +5808,55 @@ Hub.rideTreadmill = function()
 	Hub.RideStarted = (Hub.RideStarted or 0) + 1
 	Hub.Riding = true   -- บอกตัวเฝ้าว่าอย่ามาปลดสถานะให้
 
+	-- รอให้ยืนนิ่งและเริ่มวิ่งจริงก่อน ค่อยเข้าลูปเฝ้า
+	--
+	-- move() คืน true ตอน "ถึงที่หมาย" ซึ่งยังไม่ใช่ "ขึ้นลู่วิ่งแล้ว"
+	-- เซิร์ฟต้องรับตำแหน่งใหม่ก่อนแล้วถึงเริ่มนับก้าวให้
+	-- เข้าลูปเลยโดยไม่รอ = รอบแรกๆ ยังไม่ได้ speed แล้วบางทีก็หลุดออก
+	--
+	-- ตัวชี้วัดที่ถูกคือ leaderstats.Speed ขยับจริง ไม่ใช่ธง TreadmillActive
+	-- (แท่นประจำแปลงไม่ยิงสัญญาณ ActiveTreadmillChanged)
+	do
+		local function readSpeed()
+			local ls = LocalPlayer:FindFirstChild("leaderstats")
+			local sp = ls and ls:FindFirstChild("Speed")
+			return sp and tonumber(sp.Value) or nil
+		end
+		-- ปล่อยมือสนิทระหว่างอนิเมชันขึ้นแท่น  ห้ามเขียนตำแหน่งเด็ดขาด
+		--
+		-- เกมมีอนิเมชันซูมเข้าแท่นก่อนเริ่มวิ่ง  ระหว่างนั้นมันขยับตัวละครเอง
+		-- ถ้าเราเขียน CFrame ทับ (ตัวตรึงหรือ move) อนิเมชันจะถูกยกเลิก
+		-- แล้วไม่ได้ขึ้นลู่วิ่งเลย  ผู้ใช้สังเกตเห็นเอง: "เหมือนตัวเราไป cancel"
+		--
+		-- จึงปลดตัวตรึงแล้วรอเฉยๆ จนกว่า leaderstats.Speed จะเริ่มเดิน
+		-- ค่อยกลับมาตรึงในลูปหลัก ตอนนั้นอนิเมชันจบแล้วตรึงได้ไม่กระทบ
+		pcall(Hub.pinRelease)
+		local base = readSpeed()
+		local w0 = os.clock()
+		while os.clock() - w0 < 8 do
+			Hub.Phase = "รออนิเมชันขึ้นลู่วิ่ง"
+			task.wait(0.3)
+			local now = readSpeed()
+			if base and now and now > base then
+				Hub.RideConfirmed = (Hub.RideConfirmed or 0) + 1
+				break
+			end
+		end
+		if not Hub.RideConfirmed or Hub.RideConfirmed == 0 then
+			Hub.RideNoGain = (Hub.RideNoGain or 0) + 1
+		end
+	end
+
+	Hub.RideBail = nil
+	Hub.RideCheckAt, Hub.RideCheckSpeed = nil, nil
 	while Config.Running and alive() do
 		local left = Hub.nightIn() or secondsToReset()
-		-- เหลือน้อยกว่าที่ตั้งไว้ = ถึงเวลาออก
-		if left ~= nil and left <= leaveAt then break end
+		-- เหลือน้อยกว่าที่ตั้งไว้ = ถึงเวลาออก (นี่คือทางออกที่ถูกต้อง)
+		if left ~= nil and left <= leaveAt then Hub.RideBail = "ถึงเวลารีเซ็ต" break end
 		-- อ่านเวลาไม่ได้เลย อย่าค้างอยู่ตลอดกาล
-		if left == nil and os.clock() - t0 > 240 then break end
+		if left == nil and os.clock() - t0 > 240 then Hub.RideBail = "อ่านเวลาไม่ได้" break end
 		-- กล่องขึ้นจริงก็ออก
-		if Hub.resetWindow() then break end
+		if Hub.resetWindow() then Hub.RideBail = "เข้าหน้าต่างรีเซ็ต" break end
 
 		-- ตรึงกลางสายพานตลอดเวลาที่ยืน  ห้ามปล่อยให้ไถลออก
 		--
@@ -5798,15 +5872,25 @@ Hub.rideTreadmill = function()
 		-- เขียนเองทุก 0.1 วินาทีไม่พอ  ระหว่างสองครั้งฟิสิกส์ดันตัวขึ้นแล้วเด้งลง
 		-- เห็นเป็นตัวยกขึ้นยกลงตลอด และบางจังหวะก็หลุดออกจากลูกวิ่งไปเลย
 		-- ตัวตรึงเขียนทุกเฟรมและเป็นค่าสุดท้ายของเฟรมเสมอ จึงนิ่งสนิท
-		Hub.pinAt(spot, 1.5)
-		local _, h = char()
-		if h and (h.Position - spot).Magnitude > 60 then
-			-- หลุดไปไกลมาก ใช้ระบบเดินทางปกติกลับมา
-			pcall(Hub.pinRelease)
-			move(spot)
-			Hub.pinAt(spot, 1.5)
-		end
-		task.wait(1)
+		-- แตะให้น้อยที่สุดตอนวิ่งอยู่
+		--
+		-- ตรึงทุกเฟรมตลอดเวลาทำให้อนิเมชันวิ่งสะดุดและบางทีก็หลุดออกจากแท่น
+		-- เขียนเฉพาะตอนไถลออกจากกล่องจริงๆ เท่านั้น
+		-- ขนาดกล่อง 11 x 5.5 studs จึงยอมให้ขยับในรัศมี 4 ได้โดยไม่ต้องแตะ
+		-- ขึ้นแล้วอยู่ยาว  ห้ามแตะตัวละครเลยแม้แต่ครั้งเดียว
+		--
+		-- ทุกครั้งที่เราเขียนตำแหน่งหรือสั่ง move ระหว่างวิ่ง = หลุดจากลู่วิ่ง
+		-- ลู่วิ่งพาตัวเราเคลื่อนที่เป็นเรื่องปกติของมัน ไม่ใช่อาการผิดพลาด
+		--
+		-- ที่เคยลองแล้วพังทั้งหมด:
+		--   ตรึงตำแหน่งทุกเฟรม        -> ยกเลิกอนิเมชันขึ้นแท่น ไม่ได้วิ่งเลย
+		--   ดึงกลับเมื่อไถลเกิน 4     -> teleport ออกๆ เข้าๆ 109 ครั้งใน 5 นาที
+		--   สั่งขึ้นแท่นใหม่เมื่อ speed นิ่ง -> ออกมา 9 ครั้งทั้งที่ยังวิ่งอยู่ดีๆ
+		--
+		-- speed ไม่ได้เพิ่มทุกวินาที มันเพิ่มเป็นก้าวๆ  การเอาความนิ่งชั่วขณะ
+		-- มาตัดสินว่าหลุดจึงผิดเสมอ  ทางที่ถูกคือไม่ตัดสินอะไรเลย
+		--
+		-- ออกทางเดียวคือถึงเวลารีเซ็ต ซึ่งเช็คที่หัวลูปแล้ว
 		Hub.Phase = ("ยืนวิ่งสะสม speed - รีเซ็ตอีก %s วิ")
 			:format(left and math.floor(left) or "?")
 	end
