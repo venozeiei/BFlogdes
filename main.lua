@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "ride-trail-700"
+Hub.Build = "render-belt-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -591,11 +591,25 @@ local Config = {
 	-- 0 = ไม่เปิดเลยตอนยุ่ง  สูงขึ้น = เปิดครบกว่าแต่ออกไปเก็บช้าลง
 	HatchWhenBusy = 3,
 
+	-- ตอนแบกไข่กลับ ให้วิ่งเหลือกี่ส่วนของความเร็วปกติ
+	-- ใช้เมื่อเซิร์ฟไม่ได้ส่ง SpeedMultiplier มาเอง
+	CarrySpeedMul = 0.5,
+
+	-- หลบกับดักที่คนอื่นวางไว้ระหว่างเดินทาง (ดู Hub.trapList)
+	DodgeTraps = true,
+
 	-- ซื้อ Trail อัตโนมัติ  เอาตัวที่เร่ง speed สูงสุดที่เงินถึง (ดู Hub.buyBestTrail)
 	AutoTrail = true,
 
-	-- เก็บไข่ครบตามโควตาแล้วไปยืนวิ่งบนลูกวิ่งสะสม speed จนใกล้รีเซ็ต
-	-- ออกจากสถานะวิ่งเมื่อเหลือเวลาเท่ากับ PreResetHold แล้วกลับไปยืนจุดกลาง
+	-- ไปยืนบนแท่นลูกวิ่งของแปลงตัวเองระหว่างรอไข่รอบใหม่
+	--
+	-- ขึ้นได้แค่ "ไปยืนบนสายพาน" เฉยๆ ไม่ต้องยิงรีโมทอะไร
+	-- (Treadmills: RequestEquipStatic คืน false เสมอ ตัวนั้นใช้กับลูกวิ่งแบบถือเป็นไอเทม)
+	--
+	-- ห้ามใช้ Hub.TreadmillActive เป็นตัวชี้วัดว่าขึ้นสำเร็จ
+	-- สัญญาณ ActiveTreadmillChanged ใช้กับลูกวิ่งแบบไอเทม ไม่ใช่แท่นประจำแปลง
+	-- ตัวชี้วัดที่ถูกคือ leaderstats.Speed ที่เพิ่มขึ้นจริง
+	-- (วัดสด: ยืนไปหนึ่งรอบ Speed 10 -> 11,770 · WalkSpeed 18.3 -> 54.8)
 	RideTreadmill = true,
 }
 Hub.Config = Config
@@ -2034,8 +2048,9 @@ Hub.pickLaneZ = function(force)
 	return Hub.LaneZ
 end
 
-Hub.clearTreadmillState = function()
-	if os.clock() - lastFixAt < 1.5 then return false end   -- กันยิงรัวตอนสัญญาณมาถี่
+Hub.clearTreadmillState = function(force)
+	-- force = ข้ามคูลดาวน์  ใช้ตอนกำลังจะออกไปเก็บไข่ ต้องปลดให้ได้จริงๆ
+	if not force and os.clock() - lastFixAt < 1.5 then return false end
 	local net = ReplicatedStorage:FindFirstChild("Network")
 	local rf = net and net:FindFirstChild(TREAD_UNEQUIP)
 	if not rf or not rf:IsA("RemoteFunction") then
@@ -2148,7 +2163,7 @@ task.spawn(function()
 			-- ตัวนี้เป็นแค่ตาข่ายกันพลาด  ปกติ Hub.watchTreadmill ปลดให้ทันที
 			-- ตั้งแต่วินาทีที่เกมยิง ActiveTreadmillChanged มาแล้ว
 			if Config.TreadmillWatch ~= false and Hub.treadmillStuck() then
-				pcall(Hub.clearTreadmillState)
+				pcall(Hub.clearTreadmillState, true)
 			end
 			if Config.StallWatch ~= false then pcall(Hub.unstickStalled) end
 		end
@@ -2942,6 +2957,8 @@ Hub.watchCarry = function()
 		if type(st) == "table" then
 			Hub.CarryOn = st.IsCarrying == true
 			Hub.CarryUid = st.Uid
+			-- เซิร์ฟส่งตัวคูณความเร็วมาด้วยตอนแบกไข่  ต่ำกว่า 1 = ต้องวิ่งช้าลง
+			Hub.CarryMul = tonumber(st.SpeedMultiplier)
 			Hub.CarryAt = os.clock()
 			Hub.CarryEvents = (Hub.CarryEvents or 0) + 1
 		else
@@ -3238,6 +3255,28 @@ Hub.glide = function(hrp, hum, dest)
 		-- ราคาที่จ่าย: ระยะ 40 studs สุดท้ายวิ่งที่ ~28 st/s = 1.4 วินาทีต่อเที่ยว
 		-- ซึ่งถูกกว่าการเสียทั้งเที่ยวเพราะหยิบไม่ติดมาก
 		local useSpeed = speed
+
+		-- แบกไข่อยู่ = ต้องวิ่งช้าลง
+		--
+		-- payload ของ Eggs: AreaEggCarryState มีฟิลด์ SpeedMultiplier มาด้วย
+		-- (Library.Types.AreaEggs:65-72) แปลว่าเซิร์ฟลดเพดานความเร็วให้คนที่แบกไข่
+		-- วิ่งเท่าเดิมตอนแบก = เกินเพดานที่ลดลงมา แล้วโดนบังคับให้ทำไข่หล่น
+		--
+		-- อาการที่ผู้ใช้เจอ: "ถือไข่กลับมาแล้วสะดุดตรงหน้า safe zone
+		--                    ไข่หลุดอยู่ตรงนั้น แล้วไม่ไปเก็บต่อ"
+		--
+		-- ใช้ตัวคูณที่เซิร์ฟส่งมาเอง ไม่ได้เดา  ถ้าไม่ได้ส่งมาก็ใช้ค่าจากคอนฟิก
+		if Hub.CarryOn == true then
+			local mul = tonumber(Hub.CarryMul)
+			if not mul or mul <= 0 or mul > 1 then
+				mul = tonumber(Config.CarrySpeedMul) or 0.5
+			end
+			useSpeed = math.max(60, speed * mul)
+			Hub.CarrySlowed = true
+		else
+			Hub.CarrySlowed = false
+		end
+
 		local appDist = tonumber(Config.ApproachDist) or 0
 		if appDist > 0 and m <= appDist then
 			local legal = tonumber(Config.ApproachSpeed) or 0
@@ -3262,6 +3301,28 @@ Hub.glide = function(hrp, hum, dest)
 		local capPerFrame = useSpeed * math.min(dt, 0.05)
 		local stepDist = math.min(capPerFrame, m)
 		local nextPos = hrp.Position + dir * stepDist
+
+		-- หลบกับดักที่ขวางอยู่ (ดู Hub.trapList)
+		--
+		-- เบี่ยงออกด้านข้างเท่าที่พอพ้นรัศมี แล้ววิ่งต่อไปเป้าเดิม
+		-- ไม่ได้หยุด ไม่ได้เปลี่ยนเป้า จึงไม่เสียเวลาและไม่กระทบลำดับการเก็บไข่
+		if Config.DodgeTraps ~= false then
+			local t = Hub.trapAt(nextPos)
+			if t then
+				-- เวกเตอร์ตั้งฉากกับทิศที่วิ่ง เลือกข้างที่ออกห่างกับดักมากกว่า
+				local side = Vector3.new(-dir.Z, 0, dir.X)
+				local away = Vector3.new(nextPos.X - t.p.X, 0, nextPos.Z - t.p.Z)
+				if side:Dot(away) < 0 then side = -side end
+				local push = t.r + 2
+				local try = nextPos + side * push
+				-- เบี่ยงแล้วยังชนอีกก็เบี่ยงอีกฝั่ง
+				if Hub.trapAt(try) then try = nextPos - side * push end
+				if not Hub.trapAt(try) then
+					nextPos = try
+					Hub.TrapDodged = (Hub.TrapDodged or 0) + 1
+				end
+			end
+		end
 
 		-- เขียนตำแหน่งอย่างเดียว เหมือนตัวที่วัดได้ดีที่สุด
 		--
@@ -4172,6 +4233,68 @@ Hub.buyBestTrail = function(force)
 		end
 	end
 	return best ~= nil
+end
+
+--==================================================================
+-- ติดกับดักอยู่ไหม
+--
+-- เซิร์ฟปฏิเสธคำสั่งหยิบไข่ด้วยข้อความ "Cannot carry eggs while trapped"
+-- (วัดได้จริงจากการรัน) และมันบอกเวลาที่จะหลุดมาให้ด้วย
+--     Player:GetAttribute("RagdollEndTime")  = เวลา unix ที่สถานะจะหมด
+--
+-- ของเดิมไม่เคยอ่านค่านี้เลย  ผลคือวิ่งไปหาไข่ทั้งที่รู้ล่วงหน้าได้ว่าหยิบไม่ได้
+-- แล้วเสียทั้งเที่ยว (ไปกลับราว 3,400 studs) โดยเปล่าประโยชน์
+-- และไข่ที่ถืออยู่ตอนโดนกับดักก็หล่น ซึ่งเป็นอาการที่ผู้ใช้รายงาน
+Hub.trappedFor = function()
+	local t = tonumber(LocalPlayer:GetAttribute("RagdollEndTime"))
+	if not t then return 0 end
+	local left = t - os.time()
+	if left <= 0 then return 0 end
+	if left > 30 then return 0 end   -- ค่าเพี้ยน อย่าให้ค้างทั้งรอบ
+	return left
+end
+
+Hub.isTrapped = function()
+	return Hub.trappedFor() > 0
+end
+
+--==================================================================
+-- หลบกับดักที่ผู้เล่นคนอื่นวางไว้
+--
+-- กับดักอยู่ที่ workspace.__DEBRIS ชื่อ PlayerTrap และ CanTouch = true
+-- (วัดสด: เจอ 9 อัน เช่น 618,-351 · 574,-404 · 587,-343 · 615,-372 · 1307,-366)
+-- อ่านตำแหน่งได้จากฝั่งเราตรงๆ จึงหลบล่วงหน้าได้ ไม่ต้องรอโดน
+--
+-- โดนกับดัก = เซิร์ฟตั้ง RagdollEndTime แล้วปฏิเสธการหยิบไข่ด้วย
+-- "Cannot carry eggs while trapped"  และไข่ที่แบกอยู่หล่น
+--
+-- __DEBRIS เป็นโฟลเดอร์เล็ก สแกนทุก 3 วินาทีก็ไม่หนัก
+Hub.trapList = function()
+	if os.clock() - (Hub.TrapScanAt or -1e9) < 3 then return Hub.Traps or {} end
+	Hub.TrapScanAt = os.clock()
+	local out = {}
+	local deb = workspace:FindFirstChild("__DEBRIS")
+	if deb then
+		for _, d in ipairs(deb:GetDescendants()) do
+			if d:IsA("BasePart") and d.CanTouch and d.Name:lower():find("trap") then
+				-- รัศมีอันตราย = ครึ่งความกว้างที่ใหญ่สุด บวกตัวละครอีกนิด
+				local r = math.max(d.Size.X, d.Size.Z) * 0.5 + 4
+				out[#out + 1] = { p = d.Position, r = r }
+			end
+		end
+	end
+	Hub.Traps = out
+	Hub.TrapCount = #out
+	return out
+end
+
+-- ตำแหน่งนี้ชนกับดักไหม  คืนกับดักที่ชนถ้ามี
+Hub.trapAt = function(pos)
+	for _, t in ipairs(Hub.trapList()) do
+		local dx, dz = pos.X - t.p.X, pos.Z - t.p.Z
+		if (dx * dx + dz * dz) < (t.r * t.r) then return t end
+	end
+	return nil
 end
 
 Hub.resetWindow = function()
@@ -5494,18 +5617,77 @@ end
 Hub.rideTreadmill = function()
 	if Config.RideTreadmill == false then return false end
 
-	-- หาสายพานของแปลงเรา
-	local plot = myPlot()
-	local belt = plot and plot:FindFirstChild("TreadmillBottom")
-	if not belt or not belt:IsA("BasePart") then
+	-- ใช้กล่องของลูกวิ่งที่เกมเรนเดอร์ให้ ไม่ใช่สายพานบางใน Plots
+	--
+	-- เจ้าของสคริปต์ชี้ path มาให้ตรงๆ:
+	--     workspace.__ClientTreadmillRenders.TreadmillRender_<n>.BoundingBoxPart
+	-- วัดสด: TreadmillRender_6 @532, 71.1, -283 ขนาด 11.0 x 6.4 x 5.5
+	--
+	-- ดีกว่า Plots.N.TreadmillBottom เพราะ:
+	--   กล่องนี้กว้าง 11 studs (สายพานกว้าง 8.5) เผื่อพลาดได้มากกว่า
+	--   และจุดกึ่งกลางคือจุดที่ต้องไปยืนตรงๆ ไม่ต้องบวกความสูงเดาเอง
+	--
+	-- โฟลเดอร์นี้มีเฉพาะลูกวิ่งที่กำลังเรนเดอร์อยู่ ซึ่งคือของแปลงเราเอง
+	local belt, spotOverride
+	do
+		local folder = workspace:FindFirstChild("__ClientTreadmillRenders")
+		if folder then
+			for _, r in ipairs(folder:GetChildren()) do
+				local b = r:FindFirstChild("BoundingBoxPart")
+				if b and b:IsA("BasePart") then
+					belt = b
+					spotOverride = b.Position
+					break
+				end
+			end
+		end
+		-- ไม่มีตัวเรนเดอร์ก็ถอยไปใช้สายพานของแปลงเราเหมือนเดิม
+		if not belt then
+			local plot = myPlot()
+			local tb = plot and plot:FindFirstChild("TreadmillBottom")
+			if tb and tb:IsA("BasePart") then belt = tb end
+		end
+	end
+	if not belt then
 		Hub.RideNoBelt = (Hub.RideNoBelt or 0) + 1
 		return false
 	end
 
 	-- ฝ่าเท้าต้องแตะระนาบสายพาน เซิร์ฟถึงจะนับว่าขึ้นลูกวิ่ง
 	-- วัดจากเกม: สายพานเป็นแผ่นบางที่ y 67.6767 · HRP ตอนยืนอยู่ที่ 70.673
-	local spot = belt.Position + Vector3.new(0, 3.1, 0)
+	-- ต้องลงตรงกลางสายพานเป๊ะ  move() หยุดห่างได้ถึง WalkReach (6 studs)
+	-- แต่สายพานกว้าง 8.5 studs (ครึ่งละ 4.27) หยุดห่าง 6 = ตกขอบ ไม่ขึ้นลูกวิ่ง
+	-- (วัดสด: ตัวอยู่ X 538 สายพาน X 532 แล้ว TreadmillActive = false)
+	--
+	-- ความสูง: ฝ่าเท้าต้องแตะระนาบสายพาน
+	-- สายพานเป็นแผ่นบางที่ y 67.6767 · ฝ่าเท้าอยู่ต่ำกว่า HRP 3.096
+	-- จึงต้องวาง HRP ที่ผิวสายพาน + 3.09
+	-- ใช้จุดกึ่งกลางกล่องเรนเดอร์ตรงๆ  ถ้าถอยไปใช้สายพานค่อยบวกความสูงเอง
+	local spot = spotOverride or (belt.Position + Vector3.new(0, 3.09, 0))
 	if not move(spot) then return false end
+
+	-- ขยับให้ตรงกลางเป๊ะอีกที  ระยะที่เหลือไม่เกิน 6 studs = ก้าวเดียวถูกกฎ
+	for _ = 1, 20 do
+		local _, h = char()
+		if not h then break end
+		if (h.Position - spot).Magnitude < 0.6 then break end
+		pcall(function()
+			h.CFrame = CFrame.new(spot)
+			h.AssemblyLinearVelocity = Vector3.zero
+		end)
+		task.wait(0.1)
+		-- ขึ้นลูกวิ่งแล้วก็พอ ไม่ต้องดันต่อ
+		if Hub.TreadmillActive == true then break end
+	end
+
+	-- ยืนยันว่าขึ้นจริงด้วย leaderstats.Speed ที่ขยับ ไม่ใช่ธง TreadmillActive
+	-- ธงนั้นใช้กับลูกวิ่งแบบถือเป็นไอเทม แท่นประจำแปลงไม่ยิงสัญญาณนั้น
+	local function readSpeed()
+		local ls = LocalPlayer:FindFirstChild("leaderstats")
+		local sp = ls and ls:FindFirstChild("Speed")
+		return sp and tonumber(sp.Value) or nil
+	end
+	Hub.RideSpeed0 = readSpeed()
 
 	local leaveAt = tonumber(Config.PreResetHold) or 20
 	local t0 = os.clock()
@@ -5520,24 +5702,62 @@ Hub.rideTreadmill = function()
 		-- กล่องขึ้นจริงก็ออก
 		if Hub.resetWindow() then break end
 
-		-- ยืนอยู่กับที่บนสายพาน  ไม่ต้องเขียน CFrame รัวๆ
-		-- ถ้าหลุดออกไปไกลค่อยดึงกลับ
-		local _, h = char()
-		if h and (h.Position - spot).Magnitude > 12 then move(spot) end
+		-- ตรึงกลางสายพานตลอดเวลาที่ยืน  ห้ามปล่อยให้ไถลออก
+		--
+		-- สายพานกว้างแค่ 8.5 studs (ครึ่งละ 4.27) และตัวมันดันเราออกตลอด
+		-- ปล่อยไว้แป๊บเดียวก็หลุดขอบแล้วไม่ได้ speed อีกเลย
+		-- (ผู้ใช้เห็นเอง: "วาปไปแท่นจริง แต่ยืนแป๊บเดียวแล้วเด้งออกมา ไม่ได้วิ่ง"
+		--  วัดได้: ตัวอยู่ X 538 สายพาน X 532 = ตกขอบไป 6 studs)
+		--
+		-- เขียนถี่ๆ ตรงนี้ปลอดภัย เพราะเป็นการอยู่กับที่ ระยะต่อเฟรมเกือบเป็นศูนย์
+		-- ไม่ใช่การเคลื่อนที่เร็ว จึงไม่กระทบความเชื่อถือของเซิร์ฟ
+		for _ = 1, 10 do
+			local _, h = char()
+			if not h then break end
+			local gap = (h.Position - spot).Magnitude
+			if gap > 60 then
+				-- หลุดไปไกลมาก ใช้ระบบเดินทางปกติกลับมา
+				move(spot)
+			else
+				pcall(function()
+					h.CFrame = CFrame.new(spot)
+					h.AssemblyLinearVelocity = Vector3.zero
+				end)
+			end
+			task.wait(0.1)
+		end
 		Hub.Phase = ("ยืนวิ่งสะสม speed - รีเซ็ตอีก %s วิ")
 			:format(left and math.floor(left) or "?")
-		task.wait(1)
 	end
 
 	-- ออกจากสถานะวิ่งก่อนกลับ ไม่งั้นเก็บไข่ไม่ติด
 	-- (ระหว่างติดสถานะ เกมถอด Tool ออกจากตัวทันทีที่ใส่เข้ามา)
 	Hub.Phase = "ออกจากลูกวิ่ง - กลับไปรอที่จุดกลาง"
+	-- ยิงปลดตรงๆ ไม่ต้องเช็คธงก่อน
+	--
+	-- ธง Hub.TreadmillActive มาจาก RemoteEvent ที่ต่อไว้ตอนโหลด
+	-- ซึ่งเคยต่อไม่ติดเพราะรีโมทยัง replicate มาไม่ถึง (probe สด: TreadHooked = nil)
+	-- พอธงเป็น nil ตลอด treadmillStuck() ก็เป็นเท็จตลอด แล้วเราไม่เคยยิงปลดเลย
+	-- ตัวละครจึงติดสถานะวิ่งค้างไว้ แล้วเก็บไข่ไม่ติดทั้งรอบ
+	--
+	-- RequestUnequip ไม่มีพารามิเตอร์ ยิงตอนไม่ได้อยู่บนลูกวิ่งก็แค่คืนค่าไม่ใช่ true
+	-- ยิงเผื่อไว้จึงไม่มีผลเสีย ต่างจากการไม่ยิงเลยซึ่งเสียทั้งรอบ
 	for _ = 1, 3 do
-		if not Hub.treadmillStuck() then break end
-		pcall(Hub.clearTreadmillState)
-		task.wait(0.3)
+		pcall(Hub.watchTreadmill)          -- เผื่อยังต่อสัญญาณไม่ติด
+		local done = Hub.clearTreadmillState(true)
+		if done and Hub.TreadmillActive ~= true then break end
+		task.wait(0.25)
 	end
 	Hub.RideEnded = (Hub.RideEnded or 0) + 1
+	do
+		local ls = LocalPlayer:FindFirstChild("leaderstats")
+		local sp = ls and ls:FindFirstChild("Speed")
+		local now = sp and tonumber(sp.Value)
+		if now and Hub.RideSpeed0 then
+			Hub.RideGain = (Hub.RideGain or 0) + (now - Hub.RideSpeed0)
+			Hub.RideSpeedNow = now
+		end
+	end
 	move(warpHome)
 	return true
 end
@@ -5878,6 +6098,17 @@ local function warpCycle()
 				if okToTake then queue[#queue + 1] = item.rec end
 			end
 		end
+		-- บันทึกคิวไว้ตรวจว่าไปเก็บตามอันดับราคาจริงไหม
+		-- ดูได้จาก getgenv().EGG_FARM_HUB.QueueTop และ .GotRates
+		do
+			local top = {}
+			for i = 1, math.min(6, #queue) do
+				top[i] = math.floor(eggRate(queue[i]) or 0)
+			end
+			Hub.QueueTop = top
+			Hub.GotRates = {}
+		end
+
 		if #queue > 0 and Hub.ResetSeenAt and not Hub.GapEggSeen then
 			Hub.GapEggSeen = os.clock() - Hub.ResetSeenAt
 		end
@@ -5897,6 +6128,7 @@ local function warpCycle()
 		local qi = 0
 		-- นับการลองซ้ำต่อไข่หนึ่งใบ  ใบละครั้งเดียว (ดูสองจุดที่ใช้ข้างล่าง)
 		local eggRetry = {}
+		local eggTail = {}   -- ใบที่เอาไปต่อท้ายคิวแล้ว ต่อได้ใบละครั้ง
 		-- โควตาต้องเผื่อการลองซ้ำด้วย ไม่งั้นลองซ้ำไปสองสามใบก็หมดโควตาแล้ว
 		-- ของเดิม chainGrab * 2 = 10 ครั้งสำหรับ 5 ใบ พอมีลองซ้ำจะไม่พอ
 		while got < chainGrab and tried < chainGrab * 3 do
@@ -5963,7 +6195,22 @@ local function warpCycle()
 				if eggRetry[nextEgg.Uid] <= 1 then
 					qi = qi - 1   -- ใบเดิม ลองอีกรอบ
 				else
-					Hub.SkipEgg = (Hub.SkipEgg or 0) + 1
+					-- ห้ามทิ้งใบนี้ถาวร  เอาไปต่อท้ายคิวให้ได้โอกาสอีกหลังเก็บใบอื่นแล้ว
+					--
+					-- ของเดิมพอลองครบก็ข้ามไปเลย ซึ่งมักเป็นใบที่แพงที่สุด
+					-- (ผู้ใช้รายงาน "ดึงไม่ติดแล้วมันเมินไข่นั้นเลย")
+					-- เหตุที่ดึงไม่ติดส่วนใหญ่ชั่วคราว: คนอื่นกำลังถืออยู่แล้วทำหล่นทีหลัง
+					-- หรือเซิร์ฟยังไม่รับตำแหน่งเรา  วนกลับมาอีกทีมักได้
+					--
+					-- ต่อท้ายได้ใบละครั้งเดียว กันวนไม่จบ
+					if not eggTail[nextEgg.Uid] then
+						eggTail[nextEgg.Uid] = true
+						queue[#queue + 1] = nextEgg
+						eggRetry[nextEgg.Uid] = 0   -- ให้โควตาลองใหม่ตอนวนมาถึง
+						Hub.EggRequeued = (Hub.EggRequeued or 0) + 1
+					else
+						Hub.SkipEgg = (Hub.SkipEgg or 0) + 1
+					end
 				end
 				continue
 			end
@@ -5972,6 +6219,17 @@ local function warpCycle()
 			if fieldIsFresh() or Hub.BoxUp then Hub.pinAt(eggPos, 2) end
 			-- โดนดีดกลับระหว่างทางไหม ถ้าใช่วาปกลับไปก่อนค่อยยิง
 			Hub.atEggOrRewarp(eggPos, function() return move(eggPos) end)
+
+			-- ติดกับดักอยู่ = ยิงไปก็โดนปฏิเสธ  รอให้หลุดก่อน ถูกกว่าเสียทั้งเที่ยว
+			-- เกมบอกเวลาที่จะหลุดมาให้ตรงๆ (ดู Hub.trappedFor) จึงรอเท่าที่จำเป็นพอดี
+			do
+				local wait0 = os.clock()
+				while Hub.isTrapped() and os.clock() - wait0 < 8 do
+					Hub.Phase = ("ติดกับดัก - รออีก %.1f วิ"):format(Hub.trappedFor())
+					Hub.TrapWaits = (Hub.TrapWaits or 0) + 1
+					task.wait(0.2)
+				end
+			end
 			-- ห้ามยิงหยิบจนกว่าจะ "ถึงจริง" และ "วิ่งช้ามานานพอ"
 			--
 			-- atEggOrRewarp ยอมรับที่ระยะ 30 studs ซึ่งอยู่ในเขตชะลอ (ApproachDist 40) พอดี
@@ -6124,6 +6382,9 @@ local function warpCycle()
 				got = got + 1
 				Stats.stolen += 1
 				dropFromSnap(nextEgg.Uid)   -- ใบนี้หายจากสนามแล้ว
+				if type(Hub.GotRates) == "table" then
+					Hub.GotRates[#Hub.GotRates + 1] = math.floor(eggRate(nextEgg) or 0)
+				end
 
 				-- ปลดตัวตรึงก่อนออกเดินทาง ห้ามลืมเด็ดขาด
 				--
@@ -6215,7 +6476,22 @@ local function warpCycle()
 					-- ยัดใบใหม่ลงคิวตรงตำแหน่งถัดไป แล้วให้ลูปเดินต่อตามปกติ
 					queue[qi + 1] = bestRec
 				else
-					Hub.SkipEgg = (Hub.SkipEgg or 0) + 1
+					-- ห้ามทิ้งใบนี้ถาวร  เอาไปต่อท้ายคิวให้ได้โอกาสอีกหลังเก็บใบอื่นแล้ว
+					--
+					-- ของเดิมพอลองครบก็ข้ามไปเลย ซึ่งมักเป็นใบที่แพงที่สุด
+					-- (ผู้ใช้รายงาน "ดึงไม่ติดแล้วมันเมินไข่นั้นเลย")
+					-- เหตุที่ดึงไม่ติดส่วนใหญ่ชั่วคราว: คนอื่นกำลังถืออยู่แล้วทำหล่นทีหลัง
+					-- หรือเซิร์ฟยังไม่รับตำแหน่งเรา  วนกลับมาอีกทีมักได้
+					--
+					-- ต่อท้ายได้ใบละครั้งเดียว กันวนไม่จบ
+					if not eggTail[nextEgg.Uid] then
+						eggTail[nextEgg.Uid] = true
+						queue[#queue + 1] = nextEgg
+						eggRetry[nextEgg.Uid] = 0   -- ให้โควตาลองใหม่ตอนวนมาถึง
+						Hub.EggRequeued = (Hub.EggRequeued or 0) + 1
+					else
+						Hub.SkipEgg = (Hub.SkipEgg or 0) + 1
+					end
 				end
 
 			elseif tostring(msg):find("trusted") then
@@ -6233,7 +6509,22 @@ local function warpCycle()
 				if eggRetry[nextEgg.Uid] <= 1 then
 					qi = qi - 1
 				else
-					Hub.SkipEgg = (Hub.SkipEgg or 0) + 1
+					-- ห้ามทิ้งใบนี้ถาวร  เอาไปต่อท้ายคิวให้ได้โอกาสอีกหลังเก็บใบอื่นแล้ว
+					--
+					-- ของเดิมพอลองครบก็ข้ามไปเลย ซึ่งมักเป็นใบที่แพงที่สุด
+					-- (ผู้ใช้รายงาน "ดึงไม่ติดแล้วมันเมินไข่นั้นเลย")
+					-- เหตุที่ดึงไม่ติดส่วนใหญ่ชั่วคราว: คนอื่นกำลังถืออยู่แล้วทำหล่นทีหลัง
+					-- หรือเซิร์ฟยังไม่รับตำแหน่งเรา  วนกลับมาอีกทีมักได้
+					--
+					-- ต่อท้ายได้ใบละครั้งเดียว กันวนไม่จบ
+					if not eggTail[nextEgg.Uid] then
+						eggTail[nextEgg.Uid] = true
+						queue[#queue + 1] = nextEgg
+						eggRetry[nextEgg.Uid] = 0   -- ให้โควตาลองใหม่ตอนวนมาถึง
+						Hub.EggRequeued = (Hub.EggRequeued or 0) + 1
+					else
+						Hub.SkipEgg = (Hub.SkipEgg or 0) + 1
+					end
 				end
 
 			else
@@ -6266,7 +6557,22 @@ local function warpCycle()
 					task.wait(0.12)
 					qi = qi - 1
 				else
-					Hub.SkipEgg = (Hub.SkipEgg or 0) + 1
+					-- ห้ามทิ้งใบนี้ถาวร  เอาไปต่อท้ายคิวให้ได้โอกาสอีกหลังเก็บใบอื่นแล้ว
+					--
+					-- ของเดิมพอลองครบก็ข้ามไปเลย ซึ่งมักเป็นใบที่แพงที่สุด
+					-- (ผู้ใช้รายงาน "ดึงไม่ติดแล้วมันเมินไข่นั้นเลย")
+					-- เหตุที่ดึงไม่ติดส่วนใหญ่ชั่วคราว: คนอื่นกำลังถืออยู่แล้วทำหล่นทีหลัง
+					-- หรือเซิร์ฟยังไม่รับตำแหน่งเรา  วนกลับมาอีกทีมักได้
+					--
+					-- ต่อท้ายได้ใบละครั้งเดียว กันวนไม่จบ
+					if not eggTail[nextEgg.Uid] then
+						eggTail[nextEgg.Uid] = true
+						queue[#queue + 1] = nextEgg
+						eggRetry[nextEgg.Uid] = 0   -- ให้โควตาลองใหม่ตอนวนมาถึง
+						Hub.EggRequeued = (Hub.EggRequeued or 0) + 1
+					else
+						Hub.SkipEgg = (Hub.SkipEgg or 0) + 1
+					end
 					-- เก็บเหตุผลที่ทำให้ยอมแพ้ไว้ดู  ไม่งั้นไล่ต่อไม่ได้เลย
 					Hub.SkipReason = tostring(Hub.LastCarryMsg)
 					Hub.SkipSeen = Hub.SkipSeen or {}
@@ -7732,9 +8038,20 @@ end
 --    ซึ่งคือครั้งที่สำคัญที่สุด เพราะลูกค้าหลายคนโดนเตะภายในไม่กี่วินาทีแรก
 pcall(Hub.watchNetwork)
 
--- ต่อสัญญาณลูกวิ่งทันที ห้ามรอ StartupGrace
--- ถ้าต่อช้ากว่าครั้งแรกที่เกมยิงมา เราจะพลาดครั้งนั้นแล้วติดสถานะค้างโดยไม่รู้ตัว
-pcall(Hub.watchTreadmill)
+-- ต่อสัญญาณลูกวิ่งและสถานะถือไข่  ต้องลองซ้ำจนติด
+--
+-- เรียกครั้งเดียวตอนโหลดไม่พอ  รีโมทใน ReplicatedStorage.Network ยัง replicate
+-- มาไม่ครบในวินาทีแรก (probe สด: TreadHooked = nil ทั้งที่เรียกฟังก์ชันทีหลังแล้วติดทันที)
+-- ต่อไม่ติด = ไม่รู้ว่าติดสถานะวิ่งอยู่ = เก็บไข่ไม่ติดทั้งรอบโดยไม่มีอะไรบอก
+task.spawn(function()
+	for _ = 1, 40 do
+		local a = Hub.TreadHooked or select(1, pcall(Hub.watchTreadmill)) and Hub.TreadHooked
+		local b = Hub.CarryHooked or select(1, pcall(Hub.watchCarry)) and Hub.CarryHooked
+		if a and b then break end
+		task.wait(0.5)
+	end
+	if not Hub.TreadHooked then warn("[Hamsterdiwa] ต่อสัญญาณลูกวิ่งไม่ติด") end
+end)
 
 -- ต่อสัญญาณสถานะถือไข่ทันทีเช่นกัน  ต่อช้าคือพลาดครั้งแรกแล้วนับผิดทั้งรอบ
 pcall(Hub.watchCarry)
