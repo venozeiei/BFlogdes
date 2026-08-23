@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "letgo-700"
+Hub.Build = "speedcheck-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -1866,6 +1866,9 @@ local lastFixAt = 0
 --==================================================================
 local TREAD_CHANGED = "Treadmills: ActiveTreadmillChanged"
 local TREAD_UNEQUIP = "Treadmills: RequestUnequip"
+-- ตัวสั่งขึ้นแท่นประจำแปลง  ไม่มีพารามิเตอร์ เซิร์ฟตรวจตำแหน่งเราเอง
+-- (ถอดจาก Game.Plots.TreadmillStaticController ของเกม บรรทัด 397)
+local TREAD_EQUIP = "Treadmills: RequestEquipStatic"
 
 -- ต่อสัญญาณครั้งเดียวตอนโหลด  ต่อกับรีโมทดิบตรงๆ
 -- ไม่ผ่าน Network.Fired ของเกม เพราะตัวนั้นจะไปสร้าง BindableEvent ผูกบัญชีไว้ด้วย
@@ -1901,9 +1904,31 @@ Hub.watchTreadmill = function()
 	return true
 end
 
--- เหลือไว้ให้ตัวเฝ้าเรียก  ตอนนี้อ่านจากสถานะจริง ไม่ได้เดาแล้ว
+-- ติดสถานะวิ่งอยู่ไหม  ห้ามเชื่อธงอย่างเดียว
+--
+-- ธง Hub.TreadmillActive มาจาก RemoteEvent ActiveTreadmillChanged
+-- ซึ่งวัดแล้วว่าโกหกได้: อ่านได้ false ทั้งที่ leaderstats.Speed
+-- ยังเพิ่ม 43,400 ใน 3 วินาที = ยังยืนอยู่บนแท่นจริงๆ
+-- (เกมยิงสัญญาณนี้ให้ลูกวิ่งแบบไอเทม แท่นประจำแปลงยิงไม่ครบ)
+--
+-- ตัวที่โกหกไม่ได้คือ Speed ขยับ  ขยับ = อยู่บนแท่นแน่นอน
+-- อ่านทุก 1 วินาทีจากตัวเฝ้าเบื้องหลังอยู่แล้ว จึงเทียบค่าเดิมได้เลย
+local lastSpeedVal, lastSpeedAt = nil, 0
 Hub.treadmillStuck = function()
-	return Hub.TreadmillActive == true
+	if Hub.TreadmillActive == true then return true end
+	local ls = LocalPlayer:FindFirstChild("leaderstats")
+	local sp = ls and ls:FindFirstChild("Speed")
+	local now = sp and tonumber(sp.Value)
+	if not now then return false end
+	local was, at = lastSpeedVal, lastSpeedAt
+	lastSpeedVal, lastSpeedAt = now, os.clock()
+	-- ต้องมีค่าเก่าที่อ่านมาไม่เกิน 5 วินาที ถึงจะเทียบได้
+	if was == nil or os.clock() - at > 5 then return false end
+	if now > was then
+		Hub.SpeedStillRising = (Hub.SpeedStillRising or 0) + 1
+		return true
+	end
+	return false
 end
 
 --==================================================================
@@ -2090,13 +2115,25 @@ end
 -- พอเพิ่มระบบยืนวิ่งเข้ามาทีหลัง มันแยกไม่ออกว่าอันไหนบังเอิญอันไหนตั้งใจ
 -- เลยเตะเราออกจากแท่นตัวเองทุกครั้งภายในเสี้ยววินาที
 Hub.unequipOK = function(force)
-	if Hub.RideLeaving then return true end        -- ถึงเวลาออกจริงแล้ว
+	-- ไม่ได้ตั้งใจยืนวิ่งอยู่ = ปลดได้เสมอ ไม่ต้องดูเวลา
+	--
+	-- ข้อนี้สำคัญที่สุด  ตอนออกไปเก็บไข่แล้วบังเอิญไปแตะแท่นกลางแมพ
+	-- เราติดสถานะโดยไม่ตั้งใจ แล้วเกมถอดไข่ออกจากมือทุกครั้งที่หยิบ
+	-- ต้องปลดทันที ไม่งั้นเก็บไม่ติดทั้งรอบ
+	--
+	-- เคยพลาดมาแล้ว: ใส่เงื่อนไขเวลาไว้ชั้นเดียวโดยไม่ดูว่ากำลังยืนวิ่งอยู่ไหม
+	-- ผลคือบล็อกการปลดไป 90 ครั้งระหว่างเก็บไข่ ปลดสำเร็จ 0 ครั้ง
+	-- วัดสด: ตอนเฟส "วาปเก็บไข่ (1/5)" speed ยังเพิ่ม 43,400 ใน 3 วินาที
+	-- คือยังวิ่งอยู่บนแท่นทั้งที่ควรออกไปเก็บไข่แล้ว  ได้ไข่ 0 ทั้งรอบ
+	if not Hub.Riding then return true end
+
+	-- ตั้งใจยืนวิ่งอยู่: ปลดได้เฉพาะตอนถึงกำหนดออกจริง
+	if Hub.RideLeaving then return true end
 	local left = (Hub.nightIn and Hub.nightIn())
 		or (secondsToReset and secondsToReset())
 	local hold = tonumber(Config.PreResetHold) or 20
 	if left ~= nil then return left <= hold end
-	-- อ่านเวลาไม่ได้: ตอนยืนวิ่งอยู่ห้ามยิง  นอกนั้นยอมให้ยิงตามเดิม
-	return not Hub.Riding
+	return false   -- อ่านเวลาไม่ได้และยังยืนวิ่งอยู่ = อย่าเพิ่งปลด
 end
 
 Hub.clearTreadmillState = function(force)
@@ -5803,7 +5840,7 @@ Hub.rideTreadmill = function()
 		end
 	end
 
-	local belt, spotOverride
+	local belt, spotOverride, render
 	do
 		local folder = workspace:FindFirstChild("__ClientTreadmillRenders")
 		local r = folder and folder:FindFirstChild("TreadmillRender_" .. slot)
@@ -5829,6 +5866,7 @@ Hub.rideTreadmill = function()
 				tb.Position.Y + tb.Size.Y / 2 + 3.09,
 				tb.Position.Z)
 		end
+		render = r   -- โมเดลเรนเดอร์ของแปลงเรา  ใช้เป็นเป้าเรย์เช็คเหมือนที่เกมทำ
 
 		-- กล่องเรนเดอร์ใช้เทียบยืนยันอย่างเดียว  ยืนบนมันไม่ได้
 		if bb and bb:IsA("BasePart") and belt then
@@ -5901,57 +5939,77 @@ Hub.rideTreadmill = function()
 		return false
 	end
 
-	-- ปลดตัวตรึงก่อน แล้วค่อยวางลงกลางสายพานครั้งเดียว จากนั้นปล่อยมือถาวร
+	-- ขึ้นลู่วิ่ง: วางลงกลางสายพาน แล้วยิงรีโมทสั่งขึ้น
 	--
-	-- ลำดับสำคัญมาก  ต้องปลดตรึงก่อนเขียน CFrame เสมอ
-	-- move() ตรึงตำแหน่งไว้ที่จุดที่มันหยุด ซึ่งห่างสายพานได้ถึง WalkReach (6 studs)
-	-- ตัวตรึงเขียนพิกัดทับทุกเฟรมที่ RenderPriority.Last+1 = ทับทุกอย่างที่สั่งทีหลัง
-	-- เขียน CFrame ทั้งที่ยังตรึงอยู่ = โดนลากกลับทันที
+	-- การยืนบนสายพานเฉยๆ ไม่ทำให้ขึ้นลู่วิ่ง  ต้องยิงรีโมทด้วยเสมอ
+	-- (วัดสด: ยืนกลางสายพานนิ่งสนิท 9 วินาที speed ไม่ขึ้นเลยสักหน่วย)
 	--
-	-- วัดสดยืนยันแล้ว (ตอนตรึงค้าง):
-	--   วางทันที ห่างเป้า 49.04 · ผ่าน 1 วิ ห่าง 82.78 · speed เพิ่ม 0 ใน 3 วิ
-	-- ตัวละครถูกลากกลับจุดที่ตรึงไว้ทุกครั้ง ไม่เคยขึ้นลู่วิ่งเลย
+	-- ถอดจากไคลเอนต์ของเกมเอง  Game.Plots.TreadmillStaticController บรรทัด 389-397:
+	--     params.FilterType = Enum.RaycastFilterType.Include
+	--     params.FilterDescendantsInstances = { โมเดลเรนเดอร์, TreadmillBottom }
+	--     if Workspace:Raycast(hrp.Position, Vector3.new(0, -8, 0), params) == nil then return end
+	--     u11 = now + 1.25                                  -- คูลดาวน์ 1.25 วิ
+	--     Network.Invoke(Treadmills.REQUEST_EQUIP_STATIC)   -- ไม่มีพารามิเตอร์
 	--
-	-- เขียนครั้งเดียวไม่ตัดอนิเมชัน เพราะอนิเมชันเริ่มหลังเกมตรวจพบว่าเราอยู่บนแท่น
-	-- ที่ตัดอนิเมชันคือการเขียนซ้ำๆ ระหว่างที่มันกำลังเล่นอยู่ (เคยเขียน 20 ครั้ง/2 วิ)
-	-- ย้ายจุดตรึงมาไว้กลางสายพาน แทนที่จะปลดตรึงแล้วไปสู้กับมัน
+	-- เซิร์ฟตรวจ 2 อย่าง: ยืนอยู่บนลู่วิ่งจริง และลู่วิ่งนั้นเป็นของเรา
+	-- ยิงตอนอยู่บนลู่วิ่งคนอื่นคืน false เสมอ  ไม่ใช่ว่ารีโมทใช้ไม่ได้
 	--
-	-- ตัวตรึง (HMD_Pin) เขียนพิกัดทุกเฟรมที่ RenderPriority.Last+1
-	-- = เป็นค่าสุดท้ายของเฟรมเสมอ ชนะทุกอย่างที่เราสั่งจากที่อื่น
-	-- move() ตั้งจุดตรึงไว้ที่จุดที่มันหยุด ซึ่งห่างสายพานได้ถึง WalkReach (6 studs)
-	--
-	-- วัดสดยืนยัน: เขียน CFrame ลงกลางสายพานแล้ว 0.25 วิถัดมาอยู่ห่าง 6.3
-	-- ค้างตรงนั้นตลอด ความเร็ว 0 ยืนบนพื้นธรรมดา  ถูกลากกลับจุดตรึงทุกครั้ง
-	-- (PinPos ที่อ่านได้ตอนนั้นชี้ไปที่จุดที่ move() หยุด ไม่ใช่กลางสายพาน)
-	--
-	-- ปลดตรึงอย่างเดียวไม่พอ เพราะระหว่างนั้นไม่มีใครกันเราไถลออก
-	-- ย้ายจุดตรึงมากลางสายพานแทน ตัวเขียนท้ายเฟรมจะกดเราอยู่ตรงกลางให้เอง
-	-- แล้วปล่อยทันทีที่เกมรับรู้ว่าขึ้นแล้ว อนิเมชันจึงไม่ถูกกวน
-	Hub.pinAt(spot, 4)
-
-	-- รอจนเกมรับรู้ว่าขึ้นลู่วิ่งแล้ว ค่อยปล่อยมือ
-	--
-	-- ออกได้ 2 ทาง: เกมยิงสัญญาณว่าขึ้นแล้ว · ครบ 4 วินาที (เท่าอายุตัวตรึง)
-	local pinned = os.clock()
-	while os.clock() - pinned < 4 do
-		Hub.RidePlaced = (Hub.RidePlaced or 0) + 1
-		if Hub.TreadmillActive == true then
-			-- ปล่อยตรึงเดี๋ยวนี้  ช้าไปแม้แต่เสี้ยววินาทีก็หลุด
-			--
-			-- pinAt ตั้งอายุไว้ 4 วิ แต่เราหลุดจากลูปนี้ตอนราว 1.2 วิ
-			-- เวลาที่เหลือตัวตรึงยังเขียนพิกัดของเราทุกเฟรมอยู่
-			-- พอเกมรับเราขึ้นแท่น มันย้ายเราไปยืนจุดของมันเอง (ห่างจุดเรา 6.27)
-			-- ตัวตรึงจึงลากกลับทุกเฟรม = สู้กับเกม แล้วเกมยกเลิกสถานะทิ้ง
-			--
-			-- วัดสด: สัญญาณขึ้น 4 · กันปลด 4 · ปลดแล้ว 1 (เราไม่ได้ยิงปลดเอง)
-			-- แต่ Active กลับเป็น false เอง = เกมเป็นคนยกเลิก ไม่ใช่เรา
-			pcall(Hub.pinRelease)
-			Hub.RideOnBelt = (Hub.RideOnBelt or 0) + 1
-			break
+	-- ห้ามใช้ตัวตรึงตรงนี้  วัดแล้วว่าไม่ต้องเลย
+	-- วาปลงไปครั้งเดียวแล้วอยู่นิ่งเองห่างกลาง 0.1 ตลอด 6 วินาที
+	-- ตัวตรึงมีแต่จะไปสู้กับเกมแล้วโดนยกเลิกสถานะทิ้ง
+	pcall(Hub.pinRelease)
+	do
+		local _, h0 = char()
+		if h0 then
+			pcall(function()
+				h0.CFrame = CFrame.new(spot)
+				h0.AssemblyLinearVelocity = Vector3.zero
+			end)
+			Hub.RidePlaced = (Hub.RidePlaced or 0) + 1
 		end
-		task.wait(0.1)
 	end
-	pcall(Hub.pinRelease)   -- กันเหนียว ครบ 4 วิแล้วก็ต้องปล่อย
+	task.wait(0.4)   -- ให้ตัวลงพื้นก่อน เรย์ถึงจะโดน
+
+	-- ยิงสั่งขึ้น  ลองซ้ำได้ตามคูลดาวน์ของเกมเอง
+	local rf = ReplicatedStorage:FindFirstChild("Network")
+	rf = rf and rf:FindFirstChild(TREAD_EQUIP)
+	local mounted = false
+	for try = 1, 4 do
+		local _, h = char()
+		if not h then break end
+
+		-- ไถลออกจากกลางก็วางกลับก่อนยิง  เซิร์ฟตรวจตำแหน่งจริง
+		if (h.Position - spot).Magnitude > 2 then
+			pcall(function()
+				h.CFrame = CFrame.new(spot)
+				h.AssemblyLinearVelocity = Vector3.zero
+			end)
+			task.wait(0.3)
+		end
+
+		-- เช็คแบบเดียวกับเกมก่อนยิง  ไม่โดนก็ไม่ต้องเสียคำสั่ง
+		local rp = RaycastParams.new()
+		rp.FilterType = Enum.RaycastFilterType.Include
+		rp.FilterDescendantsInstances = { belt, render }
+		local seen = workspace:Raycast(h.Position, Vector3.new(0, -8, 0), rp)
+		Hub.RideRayHit = seen and seen.Instance.Name or "ไม่โดน"
+		if not seen then
+			Hub.RideRayMiss = (Hub.RideRayMiss or 0) + 1
+		elseif rf and rf:IsA("RemoteFunction") then
+			local ok, res = pcall(function() return rf:InvokeServer() end)
+			Hub.RideEquipRes = tostring(res)
+			if ok and res == true then
+				mounted = true
+				Hub.RideOnBelt = (Hub.RideOnBelt or 0) + 1
+				break
+			end
+			Hub.RideEquipFail = (Hub.RideEquipFail or 0) + 1
+		end
+		task.wait(1.3)   -- คูลดาวน์ของเกมคือ 1.25 วิ ยิงถี่กว่านั้นเสียเปล่า
+	end
+	if not mounted then
+		Hub.RideNoMount = (Hub.RideNoMount or 0) + 1
+	end
 	do
 		local _, h = char()
 		if h then Hub.RideGap = (h.Position - spot).Magnitude end
@@ -6240,6 +6298,25 @@ local function warpCycle()
 			and (left == nil or left <= GUI_TRUST_WINDOW)
 
 		if timeNear or guiNear then
+			-- ถึงหน้าต่าง 20 วิแล้ว ต้องปลดสถานะวิ่งให้หลุดจริงก่อนไข่ชุดใหม่มา
+			--
+			-- ระหว่างติดสถานะวิ่ง เกมถอดไข่ออกจากมือทันทีที่ใส่เข้ามา = เก็บไม่ติดทั้งรอบ
+			-- (ผู้ใช้เจอตรงๆ: "เก็บไข่ไม่ติดเพราะยังติดสถานะวิ่งอยู่ มันยังไม่เคลียร์ออก")
+			--
+			-- ยิงตรงนี้เลย ไม่รอตัวเฝ้ารอบถัดไปและไม่เช็คธงก่อน
+			-- ธง Hub.TreadmillActive มาจาก RemoteEvent ที่บางครั้งต่อไม่ติด
+			-- พอธงเป็น nil ตัวเฝ้าก็ไม่ยิงเลย แล้วเราติดค้างทั้งรอบ
+			-- RequestUnequip ไม่มีพารามิเตอร์ ยิงตอนไม่ได้ติดก็แค่คืนค่าไม่ใช่ true
+			Hub.RideLeaving = true      -- เปิดประตูให้ Hub.unequipOK ยอมยิง
+			Hub.Riding = false
+			for _ = 1, 3 do
+				pcall(Hub.watchTreadmill)
+				local done = Hub.clearTreadmillState(true)
+				if done and Hub.TreadmillActive ~= true then break end
+				task.wait(0.2)
+			end
+			Hub.PreResetUnequip = (Hub.PreResetUnequip or 0) + 1
+
 			Hub.Phase = "ใกล้รีเซ็ต - ยืนรอที่จุดกลาง"
 			move(warpHome)
 
