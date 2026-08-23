@@ -1,22 +1,3 @@
---[[
-	Hamsterdiwa — Steal An Egg Auto Farm
-	PlaceId 107778070777162
-
-	ลูป: เช็ครีเซ็ต -> คัดไข่ดีสุด -> วาปไปเก็บ -> กลับฐาน -> วางไข่ -> ฟัก -> อัปฐาน -> Equip Best -> ขายตัวล้น
-
-	ทุกอย่างในไฟล์นี้วัดจากเกมจริงแล้ว:
-	  เคลื่อนที่  : วาปทีละ <=60 studs แล้วพัก  (ลากต่อเนื่องเกิน 1.5x WalkSpeed = โดนลากกลับฐาน)
-	                60/0.15 = 400 ผ่าน · 60/0.08 = 750 ผ่าน · 60/0.04 = 1500 พัง · ก้าว 120 พัง
-	  เข้าโซน     : ต้องเดินข้ามเส้น GameplayZ (x ~552.8) ทีละก้าวเล็ก ไม่งั้น "Enter the gameplay area first"
-	  เก็บไข่     : Eggs: RequestAreaEggCarry { Uid }   — เซิร์ฟเช็คระยะถึงไข่จริง เลี่ยงไม่ได้
-	  ตีมูลค่าไข่ : AssetGenerationUtil.GetRateWithoutRebirth (สายพันธุ์ + ขนาด + mutation)
-	  วางไข่      : Eggs: RequestPlaceEgg { Uid, LocalCFrame } — ต้องยืนกลางแปลงตัวเอง
-	  ฟัก         : RequestHatchEgg -> RequestCompleteHatchEgg
-	  ลงคอก       : Backpack: EquipBest
-	  ขาย         : ActiveAssets: RequestSell (uuid string)
-	  อัปฐาน      : Plots: RequestBaseUpgrade (FireServer เปล่า)
-	  Noclip      : ตัวที่ขังเราในวงไข่คือ Guard.Collider — ปิด CanCollide ฝั่งเราก็ทะลุออก
-]]
 
 --==================================================================
 -- SERVICES
@@ -27,43 +8,13 @@ local RunService         = game:GetService("RunService")
 local UserInputService   = game:GetService("UserInputService")
 local TweenService       = game:GetService("TweenService")
 local HttpService        = game:GetService("HttpService")
-
--- [ถอดออกแล้ว] เคยมี  local บริการจำลองอินพุต = บริการจำลองอินพุตของ CoreScript
---
--- บริการจำลองอินพุต เป็นบริการต้องห้าม สคริปต์ของเกมเรียกไม่ได้เลย มีแต่ CoreScript ของ Roblox
--- แค่ "เรียก" ก็ประกาศตัวว่าเป็นสคริปต์โกงแล้ว ไม่ต้องเรียกใช้ฟังก์ชันข้างในด้วยซ้ำ
---
--- วัดสดแบบแยกตัวแปร 2026-08-16:
---   เรียก บริการจำลองอินพุตของ CoreScript แล้วนั่งเฉยๆ ไม่ทำอะไรอีกเลย
---   -> โดนเตะที่ ~10 วินาที  "removed for cheating (Error Code: 267)"
--- ตัวควบคุมที่รันคู่กันแล้วรอด: ตั้ง global ชื่อเดียวกับสคริปต์ + สร้าง GUI (48 วิ)
---   · require โมดูลของเกม 3 ตัว (20 วิ+) · ยิงรีโมท 41 ครั้งรวด · ไถเก็บไข่ 6 รอบ
--- ทั้งหมดไม่โดนอะไรเลย เหลือตัวนี้ตัวเดียวที่โดน
---
--- เราใช้มันแค่กัน AFK ซึ่งฟาร์มที่ขยับตลอดเวลาไม่ต้องใช้อยู่แล้ว
--- ห้ามเอากลับมาไม่ว่ากรณีใด
-
 local LocalPlayer = Players.LocalPlayer
-
---==================================================================
--- ปิดตัวเก่าก่อน
---
--- รันไฟล์ทับโดยไม่ปิดตัวเก่า = ลูปเก่ายังวิ่งอยู่ (มันไม่ผูกกับ UI เลยไม่ตายตาม)
--- สองลูปจะแย่งกันเขียน CFrame คนละเป้าหมาย เซิร์ฟเห็นเป็นการวาปมั่วแล้วลากกลับฐานรัวๆ
--- เคยเจอมาแล้วตอนรันทับ 8 รอบ ทุกลูปเลยต้องเช็ค generation ก่อนทำงาน
---==================================================================
 local genv = (type(getgenv) == "function") and getgenv() or _G
 
 if genv.EGG_FARM_HUB then
 	pcall(function() genv.EGG_FARM_HUB.Destroy() end)
 end
 
--- ตัวนับต้องอยู่ตารางเดียวกับ Hub
---
--- executor หลายตัว getgenv() กับ _G เป็นคนละตารางกัน (เช็คมาแล้วในเครื่องจริง)
--- ถ้า Hub อยู่ genv แต่ตัวนับอยู่ _G พอรันทับ ตัวเก่าจะมองไม่เห็นว่ามีตัวใหม่มา
--- แล้วรันต่อไปเงียบๆ = สองลูปแย่งเขียน CFrame = โดนเซิร์ฟลากกลับรัวๆ
--- เขียนลงทั้งสองตารางเผื่อสคริปต์เวอร์ชันเก่ายังค้างอยู่ แต่ยึด genv เป็นหลัก
 genv.EGG_FARM_GEN = (tonumber(genv.EGG_FARM_GEN) or tonumber(_G.EGG_FARM_GEN) or 0) + 1
 local GEN = genv.EGG_FARM_GEN
 _G.EGG_FARM_GEN = GEN
@@ -92,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "back14-700"
+Hub.Build = "hatchfix-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -606,7 +557,17 @@ local Config = {
 	DeclareVelocity = false,
 
 	-- ใช้ปุ่ม ProximityPrompt ของเกมแทนการยิงรีโมทตรงๆ (ดู Hub.grabPrompt)
-	UsePrompt = true,
+	--
+	-- ปิดไว้  พิสูจน์แล้วว่าไม่ได้อะไรเลยและสร้างปัญหา
+	-- ตัวจัดการ Triggered ของปุ่ม (Game.AreaEggs:190) เรียก EggCmds.RequestCarryAreaEgg
+	-- ซึ่งคือรีโมทตัวเดียวกันเป๊ะ พารามิเตอร์เดียวกัน  กดปุ่ม = ยิงรีโมท
+	--
+	-- แต่โค้ดเรากดปุ่มแล้วรอแค่ 0.25 วินาที ทั้งที่รอบการตอบของเซิร์ฟวัดได้ 231ms
+	-- พอรอไม่ทันก็ยิงรีโมทซ้ำเป็นคำขอที่สอง = ขอหยิบไข่ใบเดียวกันสองครั้งพร้อมกัน
+	-- เซิร์ฟให้ครั้งแรกไปแล้ว ครั้งที่สองเลยตอบ "Already carrying an egg"
+	--
+	-- และ clean-700 ที่วัดได้ 20 ฟอง/150 วิ พลาด 0 ไม่มีทางปุ่มเลยสักบรรทัด
+	UsePrompt = false,
 
 	-- ชะลอกี่ studs สุดท้ายก่อนถึงเป้า  0 = ไม่ชะลอ (พฤติกรรมเดิม)
 	-- มีไว้ให้วิ่งเร็วตลอดทางได้ แล้วยังหยิบไข่ติด
@@ -625,6 +586,10 @@ local Config = {
 
 	-- ต้องเข้าใกล้ไข่ไม่เกินกี่ studs ก่อนยิง  (ปุ่มเกมยอมให้กดที่ 8)
 	GrabRadius = 8,
+
+	-- ตอนสนามมีไข่สดให้แย่ง ยังยอมเปิดไข่ได้กี่ใบก่อนจะรีบออกไปเก็บ
+	-- 0 = ไม่เปิดเลยตอนยุ่ง  สูงขึ้น = เปิดครบกว่าแต่ออกไปเก็บช้าลง
+	HatchWhenBusy = 3,
 }
 Hub.Config = Config
 
@@ -4105,6 +4070,23 @@ local function isResetting()
 	return true
 end
 
+-- อยู่ในหน้าต่างรีเซ็ตจริงหรือยัง  ใช้ที่เดียวกันทุกจุด ห้ามเช็ค Hub.BoxUp ดิบๆ อีก
+--
+-- Hub.BoxUp อ่านจาก ResetStartTimer.Enabled / EndingSoon.Visible ซึ่งค้างเปิดไว้
+-- ยืนยันสดจากเกม: ResetStartTimer.Enabled = true ขณะที่ TimeLeft อ่านได้ "in 1m 31s"
+-- แปลว่าธงเป็นจริงตลอด 91 วินาทีก่อนรีเซ็ต
+--
+-- ของเดิมเอาธงดิบไปใช้เป็นสวิตช์ "เลิกทั้งคิว" ที่หัวลูปเก็บไข่
+-- ผลคือลูปจบตั้งแต่รอบแรกก่อนจะลองหยิบด้วยซ้ำ got = 0 แล้วนับเป็น failed
+-- แล้ววนใหม่ราว 3 ครั้ง/วินาทีตลอดช่วงที่ธงค้าง
+-- = อาการ "ได้ 33 พลาด 119" โดยที่เซิร์ฟไม่ได้ปฏิเสธสักครั้ง
+Hub.resetWindow = function()
+	if not (Hub.BoxUp or isResetting()) then return false end
+	local left = Hub.nightIn() or secondsToReset()
+	-- อ่านเวลาไม่ได้ = ยอมเชื่อธง  อ่านได้แล้วไกลเกิน 45 วิ = ธงค้าง ไม่เชื่อ
+	return left == nil or left <= 45
+end
+
 function secondsToReset()
 	local frame = findGui("TimeLeft")
 	local lbl = frame and frame:FindFirstChild("TextLabel", true)
@@ -4332,7 +4314,21 @@ end
 local function rankedEggs(area)
 	local list = {}
 	for _, r in pairs(snapshot()) do
-		if r.State == "Slot" and (area == "ALL" or r.AreaId == area) then
+		-- รับทั้ง Slot และ Dropped
+		--
+		-- Dropped = ไข่ที่ใครสักคนแบกอยู่แล้วทำหล่น (โดนการ์ดตี โดนกับดัก โดนตบ)
+		-- เกมผูกปุ่ม Steal ให้มันเหมือน Slot ทุกอย่าง เก็บได้ด้วยรีโมทตัวเดียวกัน
+		-- (Game.AreaEggs applyRecordNow เรียก renderDropped ซึ่ง bindPrompt เหมือน renderSlot)
+		--
+		-- ของเดิมกรองแค่ Slot จึงมองไม่เห็นเลย  และไข่ที่หล่นมักเป็นใบแพง
+		-- เพราะคนที่แบกใบแพงคือคนที่โดนไล่ตีหนักที่สุด
+		-- อาการที่ผู้ใช้เจอ: "ไปเก็บไข่มาแล้วโดนกับดักและไข่หล่น
+		--                    พอมันหล่นเราจะเมินไม่เก็บใบนั้นเลยทั้งที่ราคาสูง"
+		--
+		-- ให้มันเข้าคิวเดียวกันแล้วเรียงด้วย eggRate() ตามปกติ
+		-- กฎเก็บใบแพงสุดก่อนจึงไม่เปลี่ยน ใบที่หล่นแค่เข้าคิวตามราคาจริงของมัน
+		local st = r.State
+		if (st == "Slot" or st == "Dropped") and (area == "ALL" or r.AreaId == area) then
 			list[#list + 1] = { rec = r, rate = eggRate(r) }
 		end
 	end
@@ -4934,8 +4930,21 @@ local function hatchReadyEggs(limit, force)
 		-- รังเลยตันที่ 30/30 แล้ววางไข่ใหม่ไม่ได้อีก (ผู้ใช้เจอ "Egg inventory full!!")
 		-- เป็นวงจรกัดตัวเองแบบเดียวกับที่เจอในตัววางไข่
 		if not Config.Running or not alive() then break end
-		if not force and (fieldIsFresh() or Hub.quietNow()) then break end
 		if limit and hatched >= limit then break end
+
+		-- ไข่ที่พร้อมแล้วต้องเปิดเลย ไม่ต้องรอให้ครบทุกใบ
+		--
+		-- ของเดิมเป็น `if not force and (fieldIsFresh() or quietNow()) then break end`
+		-- ซึ่ง break ทั้งลูป และ fieldIsFresh() เป็นจริงเกือบตลอดเวลาระหว่างฟาร์ม
+		-- ผลคือออกตั้งแต่ใบแรกแทบทุกครั้ง = ไข่ไม่เคยได้ฟัก รังตันที่ 30/30
+		-- แล้ววางไข่ใหม่ไม่ได้อีก เป็นวงจรกัดตัวเอง
+		--
+		-- ตอนนี้ไม่ออกจากลูป แต่จำกัดจำนวนแทนตอนสนามมีไข่สด
+		-- ยังได้เปิดใบที่พร้อม แต่ไม่แช่จนเสียจังหวะแย่งไข่ดี
+		-- (hatchF:InvokeServer เองเป็นตัวเช็คความพร้อม ใบไม่พร้อมเซิร์ฟตอบ false)
+		if not force and (fieldIsFresh() or Hub.quietNow()) then
+			if hatched >= (tonumber(Config.HatchWhenBusy) or 3) then break end
+		end
 		if rec.Placement ~= nil then
 			local ok = hatchF:InvokeServer(uid)
 			if ok == true then
@@ -5742,7 +5751,8 @@ local function warpCycle()
 			-- ไม่งั้นกล่องจะขึ้นตอนเราอยู่กลางสนามแล้วบัค
 			-- ตัวนับสั้น (Hub.nightIn) โผล่เฉพาะช่วงท้ายก่อนกลางคืน อ่านตรงจาก GUI
 			local nleft = Hub.nightIn()
-			if Hub.BoxUp or isResetting()
+			-- ใช้ Hub.resetWindow ไม่ใช่ Hub.BoxUp ดิบ  ดูเหตุผลเต็มที่ Hub.resetWindow
+			if Hub.resetWindow()
 			   or (nleft ~= nil and nleft <= (tonumber(Config.PreResetHold) or 10)) then
 				Hub.Phase = "ใกล้กลางคืน - เลิกเก็บ กลับไปรอที่จุดกลาง"
 				move(warpHome)
@@ -5983,7 +5993,7 @@ local function warpCycle()
 				task.wait(0.2)
 				qi = qi - 1   -- ใบเดิมยังไม่ได้ ลองซ้ำ
 
-			elseif Hub.BoxUp or isResetting() then
+			elseif Hub.resetWindow() then
 				-- เก็บไม่ติดเพราะยังรีเซ็ตไม่จบ = เลิกทั้งชุด กลับไปรอที่จุดกลาง
 				--
 				-- ห้ามลองซ้ำ ห้ามข้ามไปใบอื่น ทั้งสองทางผิดหมด:
@@ -6052,50 +6062,21 @@ local function warpCycle()
 				end
 
 			elseif tostring(msg):find("trusted") then
-				-- "Movement is not currently trusted" = เซิร์ฟไม่เชื่อถือการเคลื่อนที่
+				-- สาขานี้เคยมีลูปรอสูงสุด 2 วินาทีต่อใบ แล้วยิงหยิบซ้ำ  ถอดทิ้งแล้ว
 				--
-				-- เหตุผลอันดับหนึ่งที่วัดได้จริง (23 จาก 28 ครั้ง)
-				-- เป็นการตรวจฝั่งเซิร์ฟ แยกจากระบบฝั่งไคลเอนต์คนละตัวกัน
-				-- ฝั่งไคลเอนต์เรากลบมิดแล้ว (danger 0.00 · ctx Server physics envelope)
-				-- แต่เซิร์ฟจำได้เองว่าเราเพิ่งวิ่งมาผิดปกติ จึงไม่ให้หยิบ
+				-- สองเหตุผล:
+				--   1) วัดแล้วการรอไม่ช่วยเลย (0 สำเร็จจาก 24 ครั้ง) แต่กินเวลาทุกใบ
+				--   2) สาขาสำเร็จของมันเพิ่มแค่ got  ไม่ได้ Stats.stolen ไม่ได้ dropFromSnap
+				--      และไม่ได้เรียก depositCarried  = หยิบไข่ได้แล้วแบกต่อไปทั้งเที่ยวถัดไป
+				--      แล้วรอบหน้าโดน "Already carrying" ซึ่งถูกตีความเป็นสำเร็จ
+				--      แล้ว dropFromSnap ลบใบแพงสุดออกจากคิวทั้งที่ไม่เคยได้มา
 				--
-				-- ตรงนี้ทำสองอย่างพร้อมกัน: แก้ปัญหา และวัดว่าต้องนิ่งนานแค่ไหน
-				-- หยุดสนิทจริงๆ (ล้างความเร็ว ปลดตัวตรึง) แล้วรอเป็นขั้นๆ
-				-- ขั้นไหนผ่านให้จำไว้ที่ Hub.TrustWaits รอบหน้าจะได้เริ่มจากเลขนั้นเลย
-				local waits = { 0.25, 0.6, 1.2, 2.0 }
-				local n = (Hub.TrustTry or 0) + 1
-				Hub.TrustTry = n
-				local w = waits[math.min(n, #waits)]
-
-				pcall(Hub.pinRelease)
-				local _, hh = char()
-				if hh then
-					pcall(function() hh.AssemblyLinearVelocity = Vector3.zero end)
-					pcall(function() hh.AssemblyAngularVelocity = Vector3.zero end)
-				end
-				Hub.Phase = ("รอเซิร์ฟเชื่อถือ %.2f วิ"):format(w)
-				task.wait(w)
-
-				local ok2, msg2 = Hub.callTimed(function(a)
-					return carryF:InvokeServer(a)
-				end, { Uid = nextEgg.Uid }, tonumber(Config.CallTimeout) or 4)
-				Hub.LastCarryMsg = tostring(msg2)
-				if ok2 == true then
-					-- จำไว้ว่าเลขไหนใช้ได้ เก็บสถิติไว้ปรับค่าเริ่มต้นทีหลัง
-					Hub.TrustWaits = Hub.TrustWaits or {}
-					local k = ("%.2f"):format(w)
-					Hub.TrustWaits[k] = (Hub.TrustWaits[k] or 0) + 1
-					Hub.TrustOK = (Hub.TrustOK or 0) + 1
-					got = got + 1
-					Hub.TrustTry = 0
+				-- ปฏิบัติเหมือนการปฏิเสธทั่วไป ลองซ้ำได้ครั้งเดียวแล้วไปต่อ
+				eggRetry[nextEgg.Uid] = (eggRetry[nextEgg.Uid] or 0) + 1
+				if eggRetry[nextEgg.Uid] <= 1 then
+					qi = qi - 1
 				else
-					Hub.TrustFail = (Hub.TrustFail or 0) + 1
-					Hub.DenySeen = Hub.DenySeen or {}
-					local k2 = "หลังรอ: " .. tostring(msg2)
-					Hub.DenySeen[k2] = (Hub.DenySeen[k2] or 0) + 1
-					eggRetry[nextEgg.Uid] = (eggRetry[nextEgg.Uid] or 0) + 1
-					if eggRetry[nextEgg.Uid] <= 3 then qi = qi - 1
-					else Hub.SkipEgg = (Hub.SkipEgg or 0) + 1 ; Hub.TrustTry = 0 end
+					Hub.SkipEgg = (Hub.SkipEgg or 0) + 1
 				end
 
 			else
@@ -6112,7 +6093,17 @@ local function warpCycle()
 				--
 				-- ผู้ใช้ยืนยันว่ารุ่นก่อนหน้า "ถึงแล้วเก็บติดเลย กลับทันที ฝากติดด้วย"
 				-- = ตรรกะข้ามไข่นี่แหละคือตัวที่ทำให้แย่ลง ไม่ใช่การเดินทาง
-				local MAX_TRY = 4
+				-- ลองซ้ำได้ครั้งเดียว  ไม่ใช่ 4
+				--
+				-- การลองซ้ำหนึ่งครั้ง = วิ่งกลับบ้านแล้วออกมาใหม่ ~3,400 studs
+				-- เพราะ ViaHome ดึงกลับจุดกลางทุกครั้งที่เราอยู่ห่างเกิน 20 studs
+				-- และตัวนับ tried เพิ่มทุกรอบรวมรอบที่ลองซ้ำ แต่ qi ถูกถอยกลับ
+				-- = ลองซ้ำกินโควตาโดยไม่ได้ไข่ใบใหม่
+				--
+				-- งบทั้งชุดคือ chainGrab*3 = 15  ไข่ดื้อสองใบกินไป 10 เหลือให้ใบอื่นแค่ 3
+				-- clean-700 ใช้ chainGrab*2 และมีจุดลองซ้ำจุดเดียว จึงได้ไข่ ~10 ใบต่างกัน
+				-- เหลือไว้ 1 ครั้งเพื่อให้ใบแพงสุดยังได้โอกาสที่สอง ตามกฎเก็บใบแพงก่อน
+				local MAX_TRY = 1
 				eggRetry[nextEgg.Uid] = (eggRetry[nextEgg.Uid] or 0) + 1
 				if eggRetry[nextEgg.Uid] <= MAX_TRY then
 					task.wait(0.12)
