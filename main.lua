@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "render-belt-700"
+Hub.Build = "trailwatch-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -2162,7 +2162,13 @@ task.spawn(function()
 			--
 			-- ตัวนี้เป็นแค่ตาข่ายกันพลาด  ปกติ Hub.watchTreadmill ปลดให้ทันที
 			-- ตั้งแต่วินาทีที่เกมยิง ActiveTreadmillChanged มาแล้ว
-			if Config.TreadmillWatch ~= false and Hub.treadmillStuck() then
+			-- ห้ามยุ่งตอนเราตั้งใจยืนลูกวิ่งอยู่
+			--
+			-- ตัวเฝ้ามีไว้ปลดสถานะที่ "ติดโดยไม่ได้ตั้งใจ" ตอนวิ่งผ่าน
+			-- แต่ตอน Hub.rideTreadmill กำลังทำงาน เราตั้งใจติดสถานะนั้น
+			-- ปล่อยไว้ = ตัวเฝ้ายิงปลดทุกวินาที แล้วเราหลุดจากลูกวิ่งตลอด
+			-- (ผู้ใช้เห็นเอง: เฟสขึ้น "ปลดสถานะลูกวิ่ง" ทั้งที่กำลังยืนอยู่)
+			if Config.TreadmillWatch ~= false and not Hub.Riding and Hub.treadmillStuck() then
 				pcall(Hub.clearTreadmillState, true)
 			end
 			if Config.StallWatch ~= false then pcall(Hub.unstickStalled) end
@@ -5617,34 +5623,39 @@ end
 Hub.rideTreadmill = function()
 	if Config.RideTreadmill == false then return false end
 
-	-- ใช้กล่องของลูกวิ่งที่เกมเรนเดอร์ให้ ไม่ใช่สายพานบางใน Plots
+	-- หาแปลงของเราจากเซิร์ฟ ห้ามเดา
 	--
-	-- เจ้าของสคริปต์ชี้ path มาให้ตรงๆ:
-	--     workspace.__ClientTreadmillRenders.TreadmillRender_<n>.BoundingBoxPart
-	-- วัดสด: TreadmillRender_6 @532, 71.1, -283 ขนาด 11.0 x 6.4 x 5.5
+	-- Plots: RequestState คืน { OwnersBySlot = { [หมายเลขแปลง] = UserId } }
+	-- วัดสด: OwnersBySlot { 7 = 11479566837, 6 = 2557653136, ... }
+	-- UserId ของเราคือ 11479566837 = แปลง 7
 	--
-	-- ดีกว่า Plots.N.TreadmillBottom เพราะ:
-	--   กล่องนี้กว้าง 11 studs (สายพานกว้าง 8.5) เผื่อพลาดได้มากกว่า
-	--   และจุดกึ่งกลางคือจุดที่ต้องไปยืนตรงๆ ไม่ต้องบวกความสูงเดาเอง
+	-- ก่อนหน้านี้ผมใช้ __ClientTreadmillRenders ตัวแรกที่เจอ ซึ่งผิด
+	-- โฟลเดอร์นั้นมีเฉพาะลูกวิ่งที่กล้องกำลังเรนเดอร์ ซึ่งมักเป็นของคนอื่น
+	-- (เจอ TreadmillRender_6 ตัวเดียว ทั้งที่แปลงเราคือ 7)
+	-- myPlot() คืน (โมเดลแปลง, หมายเลขแปลง) อยู่แล้ว และมีแคช 15 วินาที
+	-- มันถาม Plots: RequestState -> OwnersBySlot เทียบกับ UserId ของเราเอง
+	-- ใช้ของเดิม อย่าเขียนตัวหาแปลงซ้ำอีกตัว
+	local plot, slot = myPlot()
+	if not plot or not slot then
+		Hub.RideNoSlot = (Hub.RideNoSlot or 0) + 1
+		return false
+	end
+	Hub.RideSlotUsed = slot
+
+	-- กล่องเรนเดอร์ของแปลงเราถ้ามี  ไม่มีก็ใช้สายพานของแปลงเรา
 	--
-	-- โฟลเดอร์นี้มีเฉพาะลูกวิ่งที่กำลังเรนเดอร์อยู่ ซึ่งคือของแปลงเราเอง
+	-- ห้ามหยิบตัวแรกที่เจอใน __ClientTreadmillRenders เด็ดขาด
+	-- โฟลเดอร์นั้นมีเฉพาะลูกวิ่งที่กล้องกำลังเรนเดอร์ ซึ่งมักเป็นของคนอื่น
+	-- (เจอ TreadmillRender_6 ตัวเดียวทั้งที่แปลงเราคือ 7 = ไปยืนลูกวิ่งคนอื่น)
 	local belt, spotOverride
 	do
 		local folder = workspace:FindFirstChild("__ClientTreadmillRenders")
-		if folder then
-			for _, r in ipairs(folder:GetChildren()) do
-				local b = r:FindFirstChild("BoundingBoxPart")
-				if b and b:IsA("BasePart") then
-					belt = b
-					spotOverride = b.Position
-					break
-				end
-			end
-		end
-		-- ไม่มีตัวเรนเดอร์ก็ถอยไปใช้สายพานของแปลงเราเหมือนเดิม
-		if not belt then
-			local plot = myPlot()
-			local tb = plot and plot:FindFirstChild("TreadmillBottom")
+		local r = folder and folder:FindFirstChild("TreadmillRender_" .. slot)
+		local bb = r and r:FindFirstChild("BoundingBoxPart")
+		if bb and bb:IsA("BasePart") then
+			belt, spotOverride = bb, bb.Position
+		else
+			local tb = plot:FindFirstChild("TreadmillBottom")
 			if tb and tb:IsA("BasePart") then belt = tb end
 		end
 	end
@@ -5692,6 +5703,7 @@ Hub.rideTreadmill = function()
 	local leaveAt = tonumber(Config.PreResetHold) or 20
 	local t0 = os.clock()
 	Hub.RideStarted = (Hub.RideStarted or 0) + 1
+	Hub.Riding = true   -- บอกตัวเฝ้าว่าอย่ามาปลดสถานะให้
 
 	while Config.Running and alive() do
 		local left = Hub.nightIn() or secondsToReset()
@@ -5711,24 +5723,26 @@ Hub.rideTreadmill = function()
 		--
 		-- เขียนถี่ๆ ตรงนี้ปลอดภัย เพราะเป็นการอยู่กับที่ ระยะต่อเฟรมเกือบเป็นศูนย์
 		-- ไม่ใช่การเคลื่อนที่เร็ว จึงไม่กระทบความเชื่อถือของเซิร์ฟ
-		for _ = 1, 10 do
-			local _, h = char()
-			if not h then break end
-			local gap = (h.Position - spot).Magnitude
-			if gap > 60 then
-				-- หลุดไปไกลมาก ใช้ระบบเดินทางปกติกลับมา
-				move(spot)
-			else
-				pcall(function()
-					h.CFrame = CFrame.new(spot)
-					h.AssemblyLinearVelocity = Vector3.zero
-				end)
-			end
-			task.wait(0.1)
+		-- ตรึงทุกเฟรมด้วยตัวเขียนท้ายเฟรม (HMD_Pin ที่ RenderPriority.Last+1)
+		--
+		-- เขียนเองทุก 0.1 วินาทีไม่พอ  ระหว่างสองครั้งฟิสิกส์ดันตัวขึ้นแล้วเด้งลง
+		-- เห็นเป็นตัวยกขึ้นยกลงตลอด และบางจังหวะก็หลุดออกจากลูกวิ่งไปเลย
+		-- ตัวตรึงเขียนทุกเฟรมและเป็นค่าสุดท้ายของเฟรมเสมอ จึงนิ่งสนิท
+		Hub.pinAt(spot, 1.5)
+		local _, h = char()
+		if h and (h.Position - spot).Magnitude > 60 then
+			-- หลุดไปไกลมาก ใช้ระบบเดินทางปกติกลับมา
+			pcall(Hub.pinRelease)
+			move(spot)
+			Hub.pinAt(spot, 1.5)
 		end
+		task.wait(1)
 		Hub.Phase = ("ยืนวิ่งสะสม speed - รีเซ็ตอีก %s วิ")
 			:format(left and math.floor(left) or "?")
 	end
+
+	Hub.Riding = false
+	pcall(Hub.pinRelease)   -- เลิกตรึง ไม่งั้นลากค้างตอนออกเดินทาง
 
 	-- ออกจากสถานะวิ่งก่อนกลับ ไม่งั้นเก็บไข่ไม่ติด
 	-- (ระหว่างติดสถานะ เกมถอด Tool ออกจากตัวทันทีที่ใส่เข้ามา)
@@ -6595,7 +6609,6 @@ local function warpCycle()
 			local left = Hub.nightIn() or secondsToReset()
 			local need = (tonumber(Config.PreResetHold) or 20) + 30
 			if left ~= nil and left > need then
-				pcall(Hub.buyBestTrail)      -- มีเงินพอก็อัป trail ตอนนี้เลย
 				pcall(Hub.rideTreadmill)
 			end
 		end
@@ -8055,6 +8068,21 @@ end)
 
 -- ต่อสัญญาณสถานะถือไข่ทันทีเช่นกัน  ต่อช้าคือพลาดครั้งแรกแล้วนับผิดทั้งรอบ
 pcall(Hub.watchCarry)
+
+-- เฝ้าซื้อ Trail ตลอดเวลา  เงินถึงเมื่อไหร่ซื้อทันที
+--
+-- ของเดิมเรียกเฉพาะตอนจะไปยืนลูกวิ่ง ซึ่งไม่ทำงานเลยถ้า RideTreadmill ปิด
+-- หรือเวลาเหลือไม่พอ  แต่เงินในเกมขึ้นตลอดจากสัตว์ในคอก
+-- จึงต้องเช็คเป็นระยะแยกจากวงจรฟาร์ม
+--
+-- ตัวฟังก์ชันมีคูลดาวน์ 60 วินาทีในตัวอยู่แล้ว เรียกถี่กว่านั้นก็ไม่เปลืองอะไร
+task.spawn(function()
+	task.wait(10)   -- ให้ข้อมูลผู้เล่นโหลดเสร็จก่อน
+	while Hub.Alive do
+		if Config.AutoTrail ~= false then pcall(Hub.buyBestTrail) end
+		task.wait(20)
+	end
+end)
 
 task.spawn(function()
 	waitSettled(tonumber(Config.StartupGrace) or 15)
