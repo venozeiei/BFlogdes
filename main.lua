@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "notamper2-700"
+Hub.Build = "popup-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -637,6 +637,13 @@ local Config = {
 	-- วัดสด: กดครั้งเดียว speed 275,141 -> 7,826,893 (+7.5 ล้าน)
 	-- ไม่มีอะไรให้เก็บก็แค่คืนค่าไม่ใช่ true ยิงเผื่อไว้จึงไม่มีผลเสีย
 	AutoIndex = true,
+
+	-- ปิดป๊อปอัปที่บังจอให้อัตโนมัติ
+	--
+	-- ตัวที่เจอบ่อย: "Join Event / MONSTERS ARE COMING" ของ Roblox เอง
+	-- ซึ่งอยู่ใน CoreGui ไม่ใช่ของเกม  มันบังจอและกินคลิก
+	-- รวมถึงป๊อปอัปอีเวนต์ของเกมด้วย (SakuraEventTutorialFrame · DragonEggEventUI)
+	AutoClosePopup = true,
 
 	-- ปะไม่ติดสิบครั้งแรกแล้ว ให้ลองต่อทุกกี่วินาที
 	-- ห้ามเลิกถาวร เพราะวินาทีที่ปะติดคือวินาทีที่กลับมาวิ่งเต็มความเร็ว
@@ -2191,6 +2198,95 @@ Hub.checkDevice = function()
 	end)
 end
 
+--==================================================================
+-- ปิดป๊อปอัปที่บังจอ
+--
+-- ป๊อปอัป "Join Event / MONSTERS ARE COMING" เป็น UI ของ Roblox เอง
+-- อยู่ใน CoreGui ไม่ใช่ของเกม  จึงหาใน PlayerGui ไม่เจอ
+--
+-- ทำไมจับจากข้อความ ไม่จับจาก path:
+--   Roblox เปลี่ยนโครงสร้าง CoreGui บ่อย ชื่อโหนดไม่คงที่
+--   แต่ข้อความบนปุ่มกับหัวเรื่องเปลี่ยนน้อยกว่ามาก
+--   จับจากข้อความจึงทนต่อการอัปเดตมากกว่า
+--
+-- ทำไมไม่ปิด RobloxPromptGui ทั้งก้อน:
+--   ก้อนนั้นใช้ร่วมกับ prompt อื่นของ Roblox ด้วย (ยืนยันซื้อของ ฯลฯ)
+--   ปิดทั้งก้อนคือปิดของที่จำเป็นไปด้วย  ซ่อนเฉพาะเฟรมที่ตรงเท่านั้น
+--==================================================================
+Hub.PopupWords = {
+	"JOIN EVENT",
+	"NOTIFY ME",
+	"MONSTERS ARE COMING",
+}
+
+-- ไล่ขึ้นไปหาเฟรมที่ครอบข้อความนั้นอยู่ แล้วซ่อนเฉพาะตัวนั้น
+local function hideOwner(node, root)
+	local cur, best = node, nil
+	for _ = 1, 8 do
+		if not cur or cur == root then break end
+		if cur:IsA("Frame") or cur:IsA("ImageLabel") or cur:IsA("CanvasGroup") then
+			best = cur
+		end
+		cur = cur.Parent
+	end
+	if best then
+		local ok = pcall(function() best.Visible = false end)
+		if ok then return true end
+	end
+	return false
+end
+
+Hub.closePopups = function()
+	if Config.AutoClosePopup == false then return 0 end
+	local closed = 0
+
+	local roots = {}
+	local okc, cg = pcall(function() return game:GetService("CoreGui") end)
+	if okc and cg then roots[#roots + 1] = cg end
+	local pg = LocalPlayer:FindFirstChild("PlayerGui")
+	if pg then roots[#roots + 1] = pg end
+
+	for _, root in ipairs(roots) do
+		local okd, list = pcall(function() return root:GetDescendants() end)
+		if okd and type(list) == "table" then
+			for _, d in ipairs(list) do
+				local okt, txt = pcall(function()
+					return (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text or nil
+				end)
+				if okt and type(txt) == "string" and txt ~= "" then
+					local up = txt:upper()
+					for _, w in ipairs(Hub.PopupWords) do
+						if up:find(w, 1, true) then
+							if hideOwner(d, root) then
+								closed = closed + 1
+								Hub.PopupClosed = (Hub.PopupClosed or 0) + 1
+								Hub.PopupLast = txt:sub(1, 30)
+							end
+							break
+						end
+					end
+				end
+			end
+		end
+	end
+
+	-- ป๊อปอัปอีเวนต์ของเกมเอง  ปิดตรงๆ ได้เลยเพราะรู้ชื่อแน่นอน
+	if pg then
+		for _, name in ipairs({ "SakuraEventTutorialFrame", "DragonEggEventUI" }) do
+			local g = pg:FindFirstChild(name)
+			if g and g:IsA("ScreenGui") and g.Enabled then
+				if pcall(function() g.Enabled = false end) then
+					closed = closed + 1
+					Hub.PopupClosed = (Hub.PopupClosed or 0) + 1
+					Hub.PopupLast = name
+				end
+			end
+		end
+	end
+
+	return closed
+end
+
 -- เก็บรางวัล Pet Index (ปุ่ม CLAIM ALL ในหน้า Pet Index)
 --
 -- รางวัลสะสมจากการค้นพบสัตว์ชนิดใหม่ ให้ speed กับเงิน
@@ -2677,6 +2773,15 @@ task.spawn(function()
 			-- (ผู้ใช้เห็นเอง: เฟสขึ้น "ปลดสถานะลูกวิ่ง" ทั้งที่กำลังยืนอยู่)
 			if Config.TreadmillWatch ~= false and not Hub.Riding and Hub.treadmillStuck() then
 				pcall(Hub.clearTreadmillState, true)
+			end
+
+			-- ปิดป๊อปอัปที่บังจอ  ทุก 2 วินาที
+			-- ไล่ GetDescendants ของ CoreGui ซึ่งไม่ใหญ่ ไม่กินแรงจนสังเกตได้
+			if Config.AutoClosePopup ~= false then
+				if not Hub.PopupAt or os.clock() - Hub.PopupAt >= 2 then
+					Hub.PopupAt = os.clock()
+					pcall(Hub.closePopups)
+				end
 			end
 
 			-- ตรวจแรงเครื่องครั้งเดียวตอนเริ่ม (ดู Hub.checkDevice)
