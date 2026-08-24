@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "notamper-700"
+Hub.Build = "exitlog-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -569,16 +569,24 @@ local Config = {
 	-- และ clean-700 ที่วัดได้ 20 ฟอง/150 วิ พลาด 0 ไม่มีทางปุ่มเลยสักบรรทัด
 	UsePrompt = false,
 
-	-- ชะลอกี่ studs สุดท้ายก่อนถึงเป้า  0 = ไม่ชะลอ วาปตรงเข้าไข่แล้วยิงเลย
+	-- ชะลอกี่ studs สุดท้ายก่อนถึงเป้า  0 = ไม่ชะลอเลย
 	--
-	-- ปิดไว้  ตั้ง 40 แล้วยังหยิบไม่ติดอยู่ดี = จ่ายเวลาฟรี
-	-- ราคาที่จ่ายตอนเปิด: 40 studs สุดท้ายวิ่งที่เพดานกฎ (~143 st/s แทน 700)
-	-- คิดเป็นราว 0.3 วินาทีต่อเที่ยว บวกกับที่ต้องรอตัวอย่างความเร็วสะอาด
+	-- 10 คือค่าต่ำสุดที่วัดแล้วว่ายังเก็บไข่ติด  วัดสดสามค่าเทียบกัน:
 	--
-	-- (ผู้ใช้เจอ: "ตอนวาปไปเก็บไข่มันชะลอนาน สุดท้ายก็ดึงไข่ไม่ติดอยู่ดี")
-	-- ทางที่เหลือคือวาปถึงแล้วรอ WarpSettle 0.18 วิ ซึ่งเป็นค่าต่ำสุดที่วัดได้
-	-- ว่าเซิร์ฟยอมรับตำแหน่งใหม่ (0.06 วิ ถูกปฏิเสธทุกครั้ง · 0.15 วิ ผ่าน)
-	ApproachDist = 0,
+	--   ชะลอ 40  ได้ไข่ 4 · ปฏิเสธ 0                    ช้าเกินจำเป็น ~0.28 วิ/เที่ยว
+	--   ชะลอ 10  ได้ไข่ 5 · ปฏิเสธ 3 (คนละเรื่อง)       ~0.07 วิ/เที่ยว  <- ใช้ตัวนี้
+	--   ชะลอ 0   ได้ไข่ 0 · ปฏิเสธ 9                    ใช้ไม่ได้เลย
+	--
+	-- ตัวชี้วัดที่ถูกคือข้อความที่เซิร์ฟตอบกลับ ไม่ใช่จำนวนครั้งที่ถูกปฏิเสธ
+	--   ที่ 0  ปฏิเสธ 9 ครั้งด้วย "Movement is not currently trusted" = ความเร็วล้วนๆ
+	--   ที่ 10 ปฏิเสธ 3 ครั้งด้วย "Get closer" กับ "Egg unavailable"
+	--          = เรื่องระยะกับการแข่งกับคนอื่น ไม่เกี่ยวกับความเร็ว
+	--
+	-- เซิร์ฟต้องเห็นตัวอย่างการเคลื่อนที่ที่ถูกกฎติดกันหลายเฟรมก่อนอนุมัติให้หยิบ
+	-- 10 studs ที่เพดานกฎ (~143 st/s) ให้ตัวอย่างพอแล้ว ไม่ต้องถึง 40
+	--
+	-- ช่วงเดินทางหลัก (2,000-3,000 studs) ยังวิ่ง 700 เต็มเหมือนเดิม ไม่ได้ช้าลงเลย
+	ApproachDist = 10,
 
 	-- ความเร็วช่วงชะลอ  0 = คิดเองจากเพดานที่กฎยอมให้ (WalkSpeed*1.1+8)
 	ApproachSpeed = 0,
@@ -600,6 +608,13 @@ local Config = {
 	-- ลูกค้าที่โดน "You have been removed for cheating" ทันทีที่เริ่มวาป
 	-- คือเครื่องที่ปะไม่ติด แล้ววิ่ง 700 ทั้งที่ระบบตรวจยังทำงานเต็มที่
 	RequirePatch = true,
+
+	-- เก็บรางวัล Pet Index อัตโนมัติ (ปุ่ม CLAIM ALL)
+	--
+	-- ยิง Index: RequestClaimAll เปล่าๆ ไม่ต้องส่งพารามิเตอร์ คืน true ถ้าเก็บได้
+	-- วัดสด: กดครั้งเดียว speed 275,141 -> 7,826,893 (+7.5 ล้าน)
+	-- ไม่มีอะไรให้เก็บก็แค่คืนค่าไม่ใช่ true ยิงเผื่อไว้จึงไม่มีผลเสีย
+	AutoIndex = true,
 
 	-- ปะไม่ติดสิบครั้งแรกแล้ว ให้ลองต่อทุกกี่วินาที
 	-- ห้ามเลิกถาวร เพราะวินาทีที่ปะติดคือวินาทีที่กลับมาวิ่งเต็มความเร็ว
@@ -2081,6 +2096,30 @@ Hub.treadmillStuck = function()
 	return false
 end
 
+-- เก็บรางวัล Pet Index (ปุ่ม CLAIM ALL ในหน้า Pet Index)
+--
+-- รางวัลสะสมจากการค้นพบสัตว์ชนิดใหม่ ให้ speed กับเงิน
+-- ไม่กดก็ค้างอยู่เฉยๆ ไม่หาย แต่กดแล้วได้ทันที
+--
+-- วัดสด: กดครั้งเดียวได้ speed +7,551,752 (275,141 -> 7,826,893)
+-- ยิ่งฟาร์มนาน ยิ่งค้นพบสัตว์ใหม่เยอะ รางวัลยิ่งสะสม
+--
+-- ยิงเปล่าๆ ไม่ต้องส่งอะไร  ไม่มีของให้เก็บก็แค่คืนค่าไม่ใช่ true
+Hub.claimIndex = function()
+	if Config.AutoIndex == false then return false end
+	local net = ReplicatedStorage:FindFirstChild("Network")
+	local rf = net and net:FindFirstChild("Index: RequestClaimAll")
+	if not rf or not rf:IsA("RemoteFunction") then return false end
+
+	local got = Hub.rq(function() return rf:InvokeServer() end)
+	if got == true then
+		Hub.IndexClaimed = (Hub.IndexClaimed or 0) + 1
+		log("เก็บรางวัล Pet Index แล้ว")
+		return true
+	end
+	return false
+end
+
 --==================================================================
 -- แจ้งเตือนไข่หายากล่วงหน้าเข้า Discord
 --
@@ -2154,6 +2193,27 @@ Hub.checkRare = function(force)
 	end
 	if #lines == 0 then lines[1] = "รอบนี้ไม่มีไข่หายาก" end
 
+	-- ไข่ที่แพงที่สุดในชุดใหม่ พร้อมราคาจริง
+	--
+	-- ตัวเปิดเผยของเกมบอกแค่ RarityId กับ Message ไม่บอกราคา
+	-- ราคาต้องคิดเองหลังไข่โผล่จริง ด้วยโมดูลของเกมเอง (AGU.GetRateWithoutRebirth)
+	-- ซึ่งตรงกับ MoneyPerSecond ที่เซิร์ฟใช้ ไม่ใช่การเดา
+	--
+	-- ส่งตามไปในข้อความเดียวกัน จะได้เห็นทั้ง "อะไรจะมา" และ "แพงเท่าไหร่"
+	local topLines = {}
+	do
+		local ranked = rankedEggs("ALL")
+		for i = 1, math.min(5, #ranked) do
+			local e = ranked[i]
+			local r = e.rec
+			local mut = (type(r.Mutations) == "table" and r.Mutations[1])
+				and (" · " .. tostring(r.Mutations[1])) or ""
+			topLines[#topLines + 1] = ("**%s**  `$%s/s`  · %s%s"):format(
+				tostring(r.AssetCategory), comma(math.floor(e.rate)),
+				tostring(r.AreaId), mut)
+		end
+	end
+
 	Hub.postHook({
 		username = "Steal An Egg",
 		embeds = { {
@@ -2168,6 +2228,9 @@ Hub.checkRare = function(force)
 				{ name = "เริ่มอีก", value = (left > 0)
 					and ("%d นาที %d วินาที"):format(math.floor(left / 60), left % 60)
 					or "เริ่มแล้ว", inline = true },
+				{ name = "ไข่แพงที่สุดในสนามตอนนี้",
+					value = (#topLines > 0) and table.concat(topLines, "\n") or "ยังไม่มีข้อมูล",
+					inline = false },
 			},
 		} },
 	})
@@ -2519,6 +2582,15 @@ task.spawn(function()
 			-- (ผู้ใช้เห็นเอง: เฟสขึ้น "ปลดสถานะลูกวิ่ง" ทั้งที่กำลังยืนอยู่)
 			if Config.TreadmillWatch ~= false and not Hub.Riding and Hub.treadmillStuck() then
 				pcall(Hub.clearTreadmillState, true)
+			end
+
+			-- เก็บรางวัล Pet Index ทุก 60 วินาที
+			-- ยิงครั้งเดียวจบ ไม่มีของก็คืนค่าไม่ใช่ true ไม่เปลืองอะไร
+			if Config.AutoIndex ~= false then
+				if not Hub.IndexAt or os.clock() - Hub.IndexAt >= 60 then
+					Hub.IndexAt = os.clock()
+					pcall(Hub.claimIndex)
+				end
 			end
 
 			-- ต่อสัญญาณไข่หายากให้ติด แล้วเช็ครอบละครั้ง
@@ -6705,6 +6777,20 @@ Hub.rideTreadmill = function()
 		-- อาการที่ผู้ใช้เจอ: "พอขึ้นลู่วิ่งแล้วค้างเลย" และเครื่องมือวัดจากภายนอก
 		-- ก็หมดเวลาไปด้วย เพราะเธรดหลักไม่เคยว่างให้รันอะไรอีก
 		task.wait(1)
+	end
+
+	-- บันทึกการออกไว้ถาวร ไม่ถูกล้างตอนขึ้นรอบใหม่
+	--
+	-- Hub.RideBail ถูกตั้งเป็น nil ทุกครั้งที่เริ่มรอบใหม่ จึงอ่านย้อนหลังไม่ได้
+	-- ตัวนี้เก็บสะสมไว้ดูว่าแต่ละรอบออกเพราะอะไรและตอนเหลือกี่วินาที
+	-- ใช้ตอบคำถามว่า "ออกตรงเวลาไหม" ได้ตรงๆ ไม่ต้องเดา
+	do
+		local lf = (Hub.nightIn and Hub.nightIn()) or (secondsToReset and secondsToReset())
+		Hub.RideExits = Hub.RideExits or {}
+		Hub.RideExits[#Hub.RideExits + 1] = ("%s @เหลือ %s วิ"):format(
+			tostring(Hub.RideBail), tostring(lf and math.floor(lf) or "?"))
+		-- เก็บแค่ 10 รายการล่าสุดพอ
+		while #Hub.RideExits > 10 do table.remove(Hub.RideExits, 1) end
 	end
 
 	-- ถึงเวลาออกจริงแล้ว  เปิดทางให้ยิงปลดได้
