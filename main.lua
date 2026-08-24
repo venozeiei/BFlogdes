@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "safe-700"
+Hub.Build = "notamper2-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -149,7 +149,7 @@ local Config = {
 	-- รุ่นก่อนเกมอัปเดตมีตัวนี้ และรุ่นนั้นไม่โดนเตะ
 	-- เปิดไว้เพราะหลักฐานชี้ทางนี้ (สคริปต์ที่ลูกค้ารันก่อนแล้วหาย น่าจะทำแบบเดียวกัน)
 	-- ต้องมี getgc  เครื่องที่ไม่มีจะข้ามไปเอง
-	KillCorrections = true,
+	KillCorrections = false,   -- ต้องสั่งเปิดเองถ้าอยากใช้  ดูเหตุผลที่ Hub.killCorrections
 
 	-- ถึงที่หมายแล้วปล่อยโหมดยกเว้นหมดอายุ เพื่อให้เกมตั้งจุดตั้งต้นใหม่ให้ (ดู Hub.expireImpulse)
 	-- นี่คือกลไกของเกมเอง ไม่ใช่การหลอก  ปิดได้ถ้าอยากเทียบผล
@@ -608,6 +608,28 @@ local Config = {
 	-- ลูกค้าที่โดน "You have been removed for cheating" ทันทีที่เริ่มวาป
 	-- คือเครื่องที่ปะไม่ติด แล้ววิ่ง 700 ทั้งที่ระบบตรวจยังทำงานเต็มที่
 	RequirePatch = true,
+
+	-- สแกนหน่วยความจำนานเกินกี่วินาที ถือว่าเครื่องนี้ช้าเกิน แล้วปิดสแกนถาวร
+	--
+	-- getgc(true) บล็อกเธรดหลัก ระหว่างนั้นระบบกันโกงของเกมตอบ heartbeat ไม่ได้
+	-- Limits ของเกม: HeartbeatInterval 4 · ChallengeExpiry 15 · MaxInvalidHeartbeats 3
+	-- ตอบไม่ทัน 3 ครั้ง = โดนเตะ  ซึ่งเป็นเหตุที่กลุ่มมือถือ (Delta / UG Phone) โดน
+	--
+	-- เครื่องแรงวัดได้ 148ms จึงไม่โดนกฎนี้ ไม่กระทบคนที่ปกติดีอยู่แล้ว
+	ScanSlowLimit = 0.35,
+
+	-- ตรวจแรงเครื่องเองตอนเริ่ม แล้วปรับตัวเองให้เหมาะ
+	--
+	-- เครื่องอ่อน (มือถือ Delta · UG Phone · cloud phone) ตอบ heartbeat ไม่ทัน
+	-- เมื่อเธรดหลักถูกบล็อก แล้วโดนเตะด้วย Limits.MaxInvalidHeartbeats = 3
+	-- ลูกค้าไม่ต้องตั้งอะไรเอง สคริปต์วัดแล้วเลือกให้
+	--
+	-- true  = เครื่องอ่อนถอยลงมาใช้ทางปลอดภัย (ช้ากว่าแต่ไม่โดนเตะ)
+	-- false = ทุกเครื่องได้ของเต็มเหมือนกัน (เสี่ยงกับเครื่องอ่อน)
+	AutoWeakMode = true,
+
+	-- เฟรมเรตต่ำกว่านี้ถือว่าเครื่องอ่อน  วัดจากค่าเฉลี่ย 3 วินาทีแรก
+	WeakFpsLimit = 25,
 
 	-- เก็บรางวัล Pet Index อัตโนมัติ (ปุ่ม CLAIM ALL)
 	--
@@ -1589,9 +1611,15 @@ LocalPlayer.CharacterAdded:Connect(function()
 	pcall(Hub.blockLocalDeath)   -- Humanoid ตัวใหม่ ต้องปิดสถานะตายใหม่ทันที
 	-- ปะทันทีรอบหนึ่งก่อน ไม่งั้นช่วง 1 วินาทีแรกหลังเกิดใหม่ยังไม่มีการปะ
 	-- ลูปอาจวาปในช่วงนั้นพอดีแล้วตายซ้ำทันที
+	-- เรียกครั้งเดียวพอ  ห้ามเรียกซ้ำติดกัน
+	--
+	-- ของเดิมเรียกสองครั้งห่างกัน 1 วินาที ซึ่งถ้ามีตัวไหนในนั้นแตะตารางของเกม
+	-- จะครบเกณฑ์ Limits.TamperKickThreshold = 2 พอดีภายใน 1-2 วินาทีหลังโหลด
+	-- ตรงกับอาการที่ลูกค้ามือถือเจอ: โหลดเสร็จ 1-2 วิก็โดนเตะ ก่อนเริ่มฟาร์ม
+	--
+	-- ตัวที่ต้องปะจริงจะถูกเรียกซ้ำเองจาก warpReady ตอนจะเคลื่อนที่อยู่แล้ว
+	-- ไม่ต้องรีบปะตอนโหลด เพราะตอนนั้นยังไม่ได้ขยับไปไหน
 	pcall(patchAntiCheat)
-	task.wait(1)
-	pcall(patchAntiCheat)   -- ปะซ้ำหลังโมดูลโหลดครบ
 end)
 
 -- วาปได้ไหมตอนนี้
@@ -2096,6 +2124,73 @@ Hub.treadmillStuck = function()
 	return false
 end
 
+--==================================================================
+-- ตรวจแรงเครื่องเองแล้วปรับตัวเอง
+--
+-- ทำไมต้องมี:
+--   ระบบกันโกงของเกมต้องตอบ heartbeat ทุก 4 วินาที และมี challenge
+--   หมดอายุใน 15 วินาที ตอบไม่ทันครบ 3 ครั้งคือโดนเตะ
+--   (Limits: HeartbeatInterval 4 · ChallengeExpiry 15 · MaxInvalidHeartbeats 3)
+--
+--   เครื่องอ่อนที่เฟรมเรตต่ำอยู่แล้ว บวกกับงานหนักของสคริปต์
+--   (สแกนหน่วยความจำ · เขียนพิกัดทุกเฟรม · ยัดค่าทับตารางกันโกง)
+--   ทำให้ตอบไม่ทันได้ง่ายมาก จึงเป็นกลุ่มที่โดนเตะ
+--
+--   ลูกค้าตั้งค่าเองไม่ได้เพราะไม่รู้ว่าเครื่องตัวเองอยู่กลุ่มไหน
+--   สคริปต์วัดให้แล้วเลือกให้เอง ไม่ต้องทำอะไรเลย
+--
+-- วัดอย่างไร:
+--   นับเฟรมจริง 3 วินาทีแรก ไม่บล็อกอะไร ไม่ยิงรีโมท ไม่แตะตัวละคร
+--   เครื่องแรงได้ 60 เฟรม/วินาที · มือถือแลคมักต่ำกว่า 25
+--
+-- ถอยอะไรบ้างเมื่อเจอเครื่องอ่อน:
+--   ปิดการยัดค่าทับตารางกันโกง (ImpulseBypass) = ไม่มีอะไรให้เซิร์ฟจับได้
+--   ปิดการสแกนหน่วยความจำ                     = ไม่บล็อกเธรดหลัก
+--   ปิดตัวตรึงตำแหน่ง                          = ไม่เขียนพิกัดทุกเฟรม
+--   ปิด fpsBoost                              = ไม่ไล่เขียนทับทุก part ในฉาก
+--   ยิงรีโมทห่างขึ้น                            = ลดภาระเธรดหลัก
+--   ความเร็วตกไปเท่าที่กฎยอม                   = ฟาร์มได้ ช้ากว่า ไม่โดนเตะ
+--==================================================================
+Hub.checkDevice = function()
+	if Config.AutoWeakMode == false then return end
+	if Hub.DeviceChecked then return end
+	Hub.DeviceChecked = true
+
+	task.spawn(function()
+		local RunS = game:GetService("RunService")
+		local frames, t0 = 0, os.clock()
+		local conn
+		conn = RunS.Heartbeat:Connect(function() frames = frames + 1 end)
+		task.wait(3)
+		if conn.Connected then conn:Disconnect() end
+
+		local secs = math.max(0.1, os.clock() - t0)
+		local fps = frames / secs
+		Hub.DeviceFps = math.floor(fps * 10) / 10
+
+		local limit = tonumber(Config.WeakFpsLimit) or 25
+		if fps >= limit then
+			Hub.DeviceWeak = false
+			return
+		end
+
+		-- เครื่องอ่อน  ถอยทุกอย่างที่แตะระบบของเกม
+		Hub.DeviceWeak = true
+		Config.ImpulseBypass = false
+		Config.KillCorrections = false
+		Config.LiftThreshold = false
+		Config.ScanSlowLimit = 0.01   -- ปิดสแกนตั้งแต่รอบแรก
+		Hub.ScanTooSlow = true
+		Config.PinHold = false
+		Config.FpsBoost = false
+		Config.PerfMode = false
+		Config.RemoteGap = math.max(0.2, tonumber(Config.RemoteGap) or 0.1)
+		Config.RemoteBurst = math.min(5, tonumber(Config.RemoteBurst) or 8)
+
+		log(("เครื่องนี้ %d เฟรม/วินาที - ถอยไปโหมดปลอดภัยกันโดนเตะ"):format(Hub.DeviceFps))
+	end)
+end
+
 -- เก็บรางวัล Pet Index (ปุ่ม CLAIM ALL ในหน้า Pet Index)
 --
 -- รางวัลสะสมจากการค้นพบสัตว์ชนิดใหม่ ให้ speed กับเงิน
@@ -2584,6 +2679,9 @@ task.spawn(function()
 				pcall(Hub.clearTreadmillState, true)
 			end
 
+			-- ตรวจแรงเครื่องครั้งเดียวตอนเริ่ม (ดู Hub.checkDevice)
+			pcall(Hub.checkDevice)
+
 			-- เก็บรางวัล Pet Index ทุก 60 วินาที
 			-- ยิงครั้งเดียวจบ ไม่มีของก็คืนค่าไม่ใช่ true ไม่เปลืองอะไร
 			if Config.AutoIndex ~= false then
@@ -2826,6 +2924,25 @@ Hub.acState = function()
 		return nil
 	end
 
+	-- เครื่องที่สแกนช้า ห้ามสแกนอีกเลย
+	--
+	-- getgc(true) บล็อกเธรดหลักตลอดเวลาที่ไล่ ไม่คืนเฟรมให้ใครเลย
+	-- ระบบกันโกงของเกมต้องตอบ heartbeat ทุก 4 วินาที (Limits.HeartbeatInterval)
+	-- และมี challenge ที่หมดอายุใน 15 วินาที (Limits.ChallengeExpiry)
+	-- ตอบไม่ทันครบ 3 ครั้ง (Limits.MaxInvalidHeartbeats) = โดนเตะทันที
+	--
+	-- ไฟล์นี้จดไว้เองว่า "เครื่องแรงใช้ 148ms เครื่องช้าหรือมือถือใช้เป็นวินาที"
+	-- บนมือถือ Delta หรือ UG Phone การสแกนหนึ่งรอบกินเวลานานพอที่จะทำให้
+	-- heartbeat ขาดได้เลย และสแกนได้ถึง 6 ครั้งต่อตัวละคร ยิ่งซ้ำยิ่งเสี่ยง
+	--
+	-- นี่คือคำอธิบายว่าทำไมกลุ่มมือถือโดนเตะ ทั้งที่คอนฟิกเดียวกับ PC ที่ไม่โดน
+	-- และทำไมโดนตอนเริ่มทำงาน ไม่ใช่หลังฟาร์มไปนานๆ
+	--
+	-- จับเวลารอบแรก ถ้าเกินเกณฑ์ก็ปิดถาวร ไปใช้ทางที่ไม่ต้องสแกน
+	-- (RequirePatch จะจำกัดความเร็วให้เอง ยังฟาร์มได้ แค่ช้ากว่า)
+	if Hub.ScanTooSlow then return nil end
+	local scanT0 = os.clock()
+
 	local found
 	pcall(function()
 		for _, v in pairs(getgc(true)) do
@@ -2850,6 +2967,23 @@ Hub.acState = function()
 	if found then
 		Hub.ACState, Hub.ACStateFor = found, c
 		Hub.ACStateTries = 0
+	end
+
+	-- ปิดการสแกนถาวรถ้าเครื่องนี้ช้าเกิน
+	--
+	-- 0.35 วินาทีคือเกณฑ์ที่ปลอดภัย  heartbeat ต้องตอบทุก 4 วินาที
+	-- สแกนครั้งเดียว 0.35 ยังพอไหว แต่ถ้าเกินนั้นบนเครื่องที่แลคอยู่แล้ว
+	-- บวกกับสแกนซ้ำได้ 6 ครั้ง = มีโอกาสที่ heartbeat จะขาดครบ 3 ครั้ง
+	--
+	-- เครื่องแรงวัดได้ 148ms จึงไม่โดนกฎนี้เลย ไม่กระทบคนที่ปกติดีอยู่แล้ว
+	do
+		local took = os.clock() - scanT0
+		Hub.ScanMs = math.floor(took * 1000)
+		if took > (tonumber(Config.ScanSlowLimit) or 0.35) then
+			Hub.ScanTooSlow = true
+			Hub.ScanSlowAt = Hub.ScanMs
+			log(("เครื่องนี้สแกนช้า %d ms - ปิดการสแกนกันโดนเตะ"):format(Hub.ScanMs))
+		end
 	end
 	return found
 end
@@ -3080,7 +3214,22 @@ local function findIntegrityConfig()
 end
 
 Hub.killCorrections = function()
-	if Config.KillCorrections == false then return false end
+	-- ต้องสั่งเปิดชัดเจนเท่านั้น  ค่าเริ่มต้นคือไม่ทำ
+	--
+	-- ของเดิมเช็คแบบ "ไม่ได้สั่งปิด = ทำ" ซึ่งอันตราย
+	-- ถ้าคอนฟิกไม่มีคีย์นี้ (หรือ mergeConfig ทิ้งไป) มันจะทำงานเงียบๆ
+	--
+	-- ตัวนี้ทำสามอย่างกับตารางของเกม:
+	--     setreadonly(cfg, false) · cfg.CorrectionsEnabled = false · cfg.ShadowMode = true
+	-- ซึ่งเป็นการแก้ค่าในตารางกันโกงตรงๆ  เกณฑ์เตะ Limits.TamperKickThreshold = 2
+	--
+	-- และโค้ดตอนตัวละครเกิดเรียก patchAntiCheat สองครั้งห่างกัน 1 วินาที
+	-- (บรรทัด ~1614 และ ~1616) = ครบเกณฑ์พอดีภายใน 1-2 วินาทีหลังโหลด
+	-- ตรงกับอาการที่ลูกค้าเจอ: "โหลดเสร็จ 1-2 วิก็โดนเตะ" ก่อนเริ่มฟาร์มเลย
+	--
+	-- ตรวจแล้วบนเกมเวอร์ชันนี้หาตารางไม่เจอเลย (ไล่ 45,592 ตารางไม่เจอ)
+	-- จึงไม่มีประโยชน์อะไรเลย มีแต่ความเสี่ยง
+	if Config.KillCorrections ~= true then return false end
 	if Hub.CorrectionsKilled then return true end
 	-- ห้ามสแกนช่วงเชื่อมต่อยังไม่นิ่ง (ดู scanReady)
 	if not scanReady() then return false end
