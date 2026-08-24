@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "lean-700"
+Hub.Build = "notamper-700"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -591,6 +591,19 @@ local Config = {
 	-- เพราะขึ้นกับจำนวนไข่และสัตว์ที่ต้องจัดการในรอบนั้น
 	RemoteGap = 0.10,
 	RemoteBurst = 8,
+
+	-- ห้ามวิ่งเร็วถ้ายังปะตัวตรวจจับของเกมไม่ติด
+	--
+	-- true  = ปะไม่ติดก็วิ่งเท่าที่กฎยอม (ช้าลงแต่ไม่โดนเตะ)
+	-- false = วิ่ง MoveSpeed เต็มเสมอ แม้ปะไม่ติด (เสี่ยงโดนเตะใน 1-2 วินาที)
+	--
+	-- ลูกค้าที่โดน "You have been removed for cheating" ทันทีที่เริ่มวาป
+	-- คือเครื่องที่ปะไม่ติด แล้ววิ่ง 700 ทั้งที่ระบบตรวจยังทำงานเต็มที่
+	RequirePatch = true,
+
+	-- ปะไม่ติดสิบครั้งแรกแล้ว ให้ลองต่อทุกกี่วินาที
+	-- ห้ามเลิกถาวร เพราะวินาทีที่ปะติดคือวินาทีที่กลับมาวิ่งเต็มความเร็ว
+	PatchSlowGap = 60,
 
 	-- แจ้งเตือนไข่หายากล่วงหน้าเข้า Discord
 	--
@@ -1627,14 +1640,31 @@ local function warpReady()
 		-- เครื่องที่ปะไม่ติดจะวนสแกนทุก 3 วินาทีตลอดไป แม้ตอนยืนเฉยๆ
 		-- (ผู้ใช้เจอ: รันสคริปต์เฉยๆ ไม่ได้วาป ก็ค้างแล้ว)
 		--
-		-- ลองไม่ได้สิบครั้งแปลว่าเครื่องนี้ปะไม่ได้จริง เลิกลองไปเลย
-		-- ยังทำงานได้เพราะมีตาข่ายกันตายอีกสองชั้น (ปิดสถานะตาย + ดึงเลือดกลับ)
+		-- ลองสิบครั้งแรกแบบถี่ ไม่ติดก็ถอยไปลองห่างๆ ต่อ ห้ามเลิกถาวร
+		--
+		-- ของเดิมเลิกลองถาวรหลังครบสิบครั้ง ซึ่งตอนนั้นเหมาะสม
+		-- เพราะปะไม่ติดก็ยังวิ่ง 700 อยู่ดี การลองต่อจึงมีแต่เสียแรงเปล่า
+		--
+		-- ตอนนี้ต่างออกไป ปะไม่ติด = ถูกจำกัดความเร็วทันที (ดู RequirePatch)
+		-- การลองต่อจึงคุ้ม เพราะวินาทีที่ปะติดคือวินาทีที่กลับมาวิ่งเต็ม
+		--
+		-- โมดูลกันโกงถูกถอดออกจากต้นไม้ของเกมหลังโหลด (parent เป็น nil)
+		-- ยืนยันแล้ว: GetDescendants ทั้งเกมหาชื่อ Limits/Impact/FrameDigest ไม่เจอเลย
+		-- จึง require ตรงๆ ไม่ได้ ต้องพึ่ง getgc อย่างเดียว ซึ่งขึ้นกับจังหวะ
+		-- เครื่องช้าหรือมือถือมักพลาดรอบแรกๆ แล้วมาติดเอาทีหลัง
+		--
 		-- ล้างตัวนับตอนตัวละครเกิดใหม่ เพราะโมดูลสร้างชุดใหม่จริง
 		local tries = Hub.patchTries or 0
-		if tries >= 10 then return false end
 
 		local base = math.max(1, tonumber(Config.PatchRetryGap) or 3)
-		local gap = math.min(60, base * (2 ^ math.min(tries, 5)))
+		local gap
+		if tries >= 10 then
+			-- เลนช้า: ลองทุก 60 วินาที ไม่กินแรงจนสังเกตได้
+			gap = math.max(30, tonumber(Config.PatchSlowGap) or 60)
+			Hub.PatchSlowLane = true
+		else
+			gap = math.min(60, base * (2 ^ math.min(tries, 5)))
+		end
 		if os.clock() - lastPatchAt < gap then return false end
 
 		lastPatchAt = os.clock()
@@ -1753,8 +1783,15 @@ Hub.rq = function(fn, ...)
 		Hub.RemoteQueued = (Hub.RemoteQueued or 0) + 1
 		task.wait(0.03)
 	end
-	Hub.pace()
+
+	-- ตั้งธงก่อนหยุดรอ ไม่ใช่หลัง
+	--
+	-- ของเดิมเรียก Hub.pace() ซึ่งมี task.wait อยู่ข้างใน ก่อนจะตั้งธง
+	-- สองคอรูทีนจึงผ่านด่านข้างบนพร้อมกันได้ แล้วไปนอนรอใน pace() ด้วยกัน
+	-- ตื่นพร้อมกันเป๊ะ แล้วยิง InvokeServer สองอันในเฟรมเดียว
+	-- = อาการเดียวกับที่ตั้งใจจะกันตั้งแต่แรก คือกันไม่ได้จริง
 	Hub.RemoteBusy = true
+	Hub.pace()
 	local packed = table.pack(pcall(fn, ...))
 	Hub.RemoteBusy = false
 	if not packed[1] then
@@ -3408,7 +3445,30 @@ Hub.glide = function(hrp, hum, dest)
 
 	-- เปิดโหมดยกเว้นก่อน ถ้าเปิดได้จะวิ่งได้เร็วกว่าเพดานปกติหลายเท่า
 	-- เปิดไม่ได้ (executor ไม่มี getgc/debug) ก็ถอยไปใช้เพดานปกติ ยังทำงานได้เหมือนเดิม
-	local boosted = Hub.armImpulse(hrp)
+	-- ปะตัวตรวจจับไม่ติด = ห้ามยัดค่าปลอมทับตารางกันโกงเลยแม้แต่ครั้งเดียว
+	--
+	-- armImpulse เขียน ImpulseContext ปลอม (MaxHorizontalSpeed = 5000) ทับ
+	-- ตารางสถานะภายในของระบบกันโกงทุกเฟรม  และโมดูล Playback ของเกม
+	-- ส่งฟิลด์นั้นขึ้นเซิร์ฟตรงๆ พร้อม Evidence กับ ThreatLevel
+	-- เซิร์ฟจึงเทียบค่าที่เราปลอมกับที่มันวัดเอง แล้วบวก TamperScore
+	--
+	-- เกณฑ์เตะจาก Limits ของเกม: TamperKickThreshold = 2
+	-- แค่สองครั้งก็โดนแล้ว จึงเกิดภายในไม่กี่วินาทีหลังเริ่มวาป
+	--
+	-- ของเดิม RequirePatch แค่ลดความเร็ว แต่ยังยัดค่าปลอมอยู่
+	-- = รับความเสี่ยงเต็มๆ โดยไม่ได้ความเร็วกลับมาเลย แย่ที่สุดในทุกทาง
+	--
+	-- ตอนนี้ถ้าจะวิ่งช้าอยู่แล้ว ก็ไม่ต้องแตะตารางของเกมเลย
+	-- ปลอดภัยสนิท ไม่มีอะไรให้เซิร์ฟจับได้ แลกกับความเร็วที่ยังไงก็ไม่ได้อยู่ดี
+	--
+	-- กลุ่มที่ได้ประโยชน์: Delta บนมือถือ กับ UG Phone
+	-- เครื่องช้าและฟังก์ชันไม่ครบ ปะไม่ติดบ่อย จึงเป็นกลุ่มที่โดนเตะ
+	local boosted = false
+	if Config.RequirePatch == false or acPatched == true then
+		boosted = Hub.armImpulse(hrp)
+	else
+		Hub.ImpulseSkipped = (Hub.ImpulseSkipped or 0) + 1
+	end
 	local speed
 	if boosted then
 		-- [เคยลองผูกกับ WalkSpeed แล้วข้อมูลบอกว่าไม่ใช่]
@@ -3423,6 +3483,33 @@ Hub.glide = function(hrp, hum, dest)
 		--
 		-- คืนกลับเป็นเลขตายตัวตามเดิม อย่าไปทำให้ไอดีที่ปกติดีอยู่แล้วช้าลงฟรีๆ
 		speed = math.clamp(tonumber(Config.MoveSpeed) or 700, 60, 900)
+
+		-- แต่ต้องปะตัวตรวจจับติดด้วย ไม่งั้นห้ามวิ่งเร็ว
+		--
+		-- นี่คือสาเหตุที่ลูกค้าโดนเตะภายใน 1-2 วินาทีตอนเริ่มวาป
+		--
+		-- armImpulse (เปิดโหมดยกเว้น) กับ patchAntiCheat (ปิดตัวตรวจจับ)
+		-- เป็นคนละกลไกกัน  ของเดิมเช็คแค่ armImpulse แล้ววิ่ง 700 เลย
+		-- เครื่องที่ armImpulse ติดแต่ patchAntiCheat ไม่ติด = วิ่ง 700
+		-- โดยที่ระบบตรวจของเกมยังทำงานเต็มที่ = โดนจับตั้งแต่วาปครั้งแรก
+		--
+		-- โค้ดเดิมจงใจไม่ถอย เขียนไว้เองที่บรรทัด ~3784:
+		--     "ปะไว้ก่อนเสมอ แล้ววาปไม่ว่าผลจะเป็นอย่างไร"
+		--     "ตัดตัวถอยทิ้ง เพราะวัดแล้ววาปด้วยมือไปได้ 981 studs ไม่ตาย"
+		-- ตอนนั้นมองแค่ "ตายหรือไม่ตาย" ไม่ได้มองว่า "โดนเตะหรือไม่โดน"
+		--
+		-- อธิบายได้ครบว่าทำไมตัวรันเดียวกันแต่บางคนโดนบางคนไม่โดน:
+		-- patchAntiCheat ไล่ getgc นับหมื่นฟังก์ชัน สำเร็จบ้างไม่สำเร็จบ้าง
+		-- ตามสภาพหน่วยความจำและจังหวะของแต่ละเครื่อง
+		--
+		-- ปิดการป้องกันนี้ได้ด้วย Config.RequirePatch = false (ไม่แนะนำ)
+		if Config.RequirePatch ~= false and acPatched ~= true then
+			speed = Hub.legalSpeed(hum)
+			Hub.SpeedCapped = (Hub.SpeedCapped or 0) + 1
+			Hub.SpeedCapReason = "ยังปะตัวตรวจจับไม่ติด - วิ่งเท่าที่กฎยอม"
+		else
+			Hub.SpeedCapReason = nil
+		end
 	else
 		speed = Hub.legalSpeed(hum)
 		-- บอกให้รู้ตัวว่าตกไปใช้ทางช้าแล้ว ห้ามเงียบ
@@ -3759,14 +3846,35 @@ end
 -- เกมส่ง (ok, reason) กลับมาจริง  ดู EggCmds.RequestCarryAreaEgg:307-313
 --     local v63, v64 = Network.Invoke(Eggs2.REQUEST_AREA_EGG_CARRY, { Uid = ..., FirstAreaSlotKey = ... })
 Hub.callTimed = function(fn, arg, secs)
+	-- ต้องเข้าคิวเหมือนทางอื่น  ตัวนี้คุมเส้นทางเก็บไข่หลักซึ่งยิงบ่อยที่สุด
+	--
+	-- ของเดิมยิงด้วย task.spawn = เธรดแยกแบบขนาน ไม่ผ่าน Hub.rq เลย
+	-- ซึ่งตรงข้ามกับเจตนาของคิวทั้งหมด: ทางที่ยิงบ่อยที่สุดกลับเป็นทางเดียว
+	-- ที่ไม่เคยเข้าคิวสักครั้ง และยิงซ้อนกับลูปเบื้องหลังได้ตลอด
+	--
+	-- รอคิวว่างก่อนแล้วค่อยปล่อยเธรด  ตัวจับเวลายังทำงานเหมือนเดิม
+	-- (ต้องใช้ task.spawn เพราะ InvokeServer ไม่มี timeout ในตัว
+	--  ถ้าเซิร์ฟไม่ตอบจะค้างตรงนั้นตลอดกาล)
+	local t0 = os.clock()
+	while Hub.RemoteBusy and os.clock() - t0 < 6 do
+		Hub.RemoteQueued = (Hub.RemoteQueued or 0) + 1
+		task.wait(0.03)
+	end
+	Hub.RemoteBusy = true
+	Hub.pace()
+
 	local done, packed = false, nil
 	task.spawn(function()
 		packed = table.pack(pcall(fn, arg))
 		done = true
+		Hub.RemoteBusy = false
 	end)
 	local limit = os.clock() + (tonumber(secs) or 4)
 	while not done and os.clock() < limit do task.wait(0.03) end
 	if not done then
+		-- หมดเวลาแล้วต้องปล่อยคิว ไม่งั้นค้างล็อกทั้งสคริปต์
+		-- (เธรดที่ยังค้างอยู่จะปล่อยซ้ำเองตอนเซิร์ฟตอบ ซึ่งไม่เป็นไร)
+		Hub.RemoteBusy = false
 		Hub.Timeouts = (Hub.Timeouts or 0) + 1
 		return false, "เซิร์ฟไม่ตอบ"
 	end
@@ -5640,8 +5748,21 @@ local function hatchReadyEggs(limit, force)
 	if hatched > 0 then
 		-- ฟักแล้วช่องรังว่างขึ้นจริง ลืมช่องที่เคยจำว่าไม่ว่างได้แล้ว
 		-- ถ้าไม่ล้าง มันจะจำผิดว่าเต็มตลอดกาลแล้ววางไข่ใหม่ไม่ได้อีก
+		-- ฟักแล้วช่องรังว่างขึ้นจริง ล้างเฉพาะความจำว่า "ช่องนี้ไม่ว่าง"
 		table.clear(slotDead)
-		if type(Hub.OutsidePlace) == "table" then table.clear(Hub.OutsidePlace) end
+
+		-- ห้ามล้าง Hub.OutsidePlace เด็ดขาด
+		--
+		-- ตารางนั้นจำว่า "จุดนี้อยู่นอกแปลงเรา" ซึ่งเป็นเรื่องของขนาดแปลง
+		-- ไม่ได้เปลี่ยนเพราะเราฟักไข่ ล้างทิ้งคือลืมแล้วไปไล่ถามเซิร์ฟใหม่ทั้งหมด
+		--
+		-- PLACE_OFFSETS มี 121 จุด (ring 0-5 = 11x11)
+		-- ฐานเล็ก Lv0-Lv2 มีแค่ 7-12 ช่อง = เกิน 100 จุดอยู่นอกแปลง
+		-- ล้างความจำทุกครั้งที่ฟัก (ซึ่งเกิดแทบทุกรอบ) = ยิงเกิน 100 ครั้งต่อไข่หนึ่งฟอง
+		-- ฐานใหญ่ Lv11 เจอที่ว่างในไม่กี่จุดแรก = ยิงไม่กี่ครั้ง
+		--
+		-- นี่คือเหตุที่ลูกค้าฐานเล็กยิงมากกว่าฐานใหญ่ 15-100 เท่าด้วยคอนฟิกเดียวกัน
+		-- ถ้าแปลงถูกอัปเกรดจริง ตัวอัปเกรดจะล้างตารางนี้ให้เองอยู่แล้ว
 		Stats.hatched += hatched
 		-- ฟักแล้วได้สัตว์ตัวใหม่ ต้องล้างแคชทันที
 		-- ไม่งั้น autoSellWeak() ที่ทำต่อจะไม่เห็นตัวใหม่ แล้วตัดสินใจจากรายการเก่า
@@ -8553,10 +8674,21 @@ local overlayHead, overlayBoard = "", ""
 
 local function renderOverlay()
 	if not overlayLabel or not overlayLabel.Parent then return end
+
+	-- เตือนตรงๆ เมื่อเครื่องนี้ปะตัวตรวจจับไม่ติด
+	--
+	-- ต้องเห็นด้วยตาเปล่า ไม่ใช่ซ่อนอยู่ในตัวนับที่ต้องไปขุดดู
+	-- ลูกค้าที่เห็นบรรทัดนี้คือกลุ่มเดียวกับที่เคยโดนเตะใน 1-2 วินาที
+	-- ตอนนี้จะไม่โดนแล้ว แต่จะฟาร์มช้ากว่าเพราะวิ่งเท่าที่กฎยอม
+	local warn = ""
+	if Hub.SpeedCapReason then
+		warn = "\n[ ปะตัวตรวจจับไม่ติด - วิ่งช้าลงเพื่อไม่ให้โดนเตะ ]"
+	end
+
 	if overlayBoard == "" then
-		overlayLabel.Text = overlayHead
+		overlayLabel.Text = overlayHead .. warn
 	else
-		overlayLabel.Text = overlayHead .. "\n" .. overlayBoard
+		overlayLabel.Text = overlayHead .. warn .. "\n" .. overlayBoard
 	end
 end
 
