@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "notamper2-700"
+Hub.Build = "net-adapt-1"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -631,12 +631,40 @@ local Config = {
 	-- เฟรมเรตต่ำกว่านี้ถือว่าเครื่องอ่อน  วัดจากค่าเฉลี่ย 3 วินาทีแรก
 	WeakFpsLimit = 25,
 
+	-- ตรวจคุณภาพ "เน็ต" แล้วปรับตัวเอง  (ดู Hub.checkNetwork)
+	--
+	-- ข้อมูลจากลูกค้าจริง: คนที่ต่อสายแลนไม่โดนเตะเลยสักคน
+	-- คนที่โดนคือ WiFi กับเน็ตมือถือแชร์ ทั้งที่รันสคริปต์ตัวเดียวกัน
+	-- = ตัวแปรคือสายเน็ต ไม่ใช่ตัวสคริปต์ ไม่ใช่ตัวรัน ไม่ใช่ความแรงเครื่อง
+	--
+	-- true  = เน็ตแย่ถอยลงมาให้อัตโนมัติ  เน็ตดีไม่แตะอะไรเลย
+	-- false = ทุกคนได้ของเต็มเหมือนกัน (เน็ตแย่เสี่ยงโดนเตะ)
+	AutoNetMode = true,
+
+	-- เส้นแบ่งคุณภาพเน็ต หน่วยเป็นวินาที
+	--
+	-- สายแลนวัดได้ราว 0.02-0.06  ·  WiFi บ้านดีๆ 0.05-0.10
+	-- WiFi แย่ 0.15-0.40  ·  เน็ตมือถือแชร์ 0.20-1.50 และกระตุกหนัก
+	--
+	-- ตั้งให้เกินช่วงของ WiFi บ้านที่ใช้ได้อยู่แล้ว จะได้ไม่ไปถ่วงคนที่ปกติดี
+	NetPingFair   = 0.12,
+	NetPingPoor   = 0.30,
+	NetJitterFair = 0.06,
+	NetJitterPoor = 0.15,
+
 	-- เก็บรางวัล Pet Index อัตโนมัติ (ปุ่ม CLAIM ALL)
 	--
 	-- ยิง Index: RequestClaimAll เปล่าๆ ไม่ต้องส่งพารามิเตอร์ คืน true ถ้าเก็บได้
 	-- วัดสด: กดครั้งเดียว speed 275,141 -> 7,826,893 (+7.5 ล้าน)
 	-- ไม่มีอะไรให้เก็บก็แค่คืนค่าไม่ใช่ true ยิงเผื่อไว้จึงไม่มีผลเสีย
 	AutoIndex = true,
+
+	-- ปิดป๊อปอัปที่บังจอให้อัตโนมัติ
+	--
+	-- ตัวที่เจอบ่อย: "Join Event / MONSTERS ARE COMING" ของ Roblox เอง
+	-- ซึ่งอยู่ใน CoreGui ไม่ใช่ของเกม  มันบังจอและกินคลิก
+	-- รวมถึงป๊อปอัปอีเวนต์ของเกมด้วย (SakuraEventTutorialFrame · DragonEggEventUI)
+	AutoClosePopup = true,
 
 	-- ปะไม่ติดสิบครั้งแรกแล้ว ให้ลองต่อทุกกี่วินาที
 	-- ห้ามเลิกถาวร เพราะวินาทีที่ปะติดคือวินาทีที่กลับมาวิ่งเต็มความเร็ว
@@ -1658,6 +1686,21 @@ local function scanReady()
 		scanReadyAt = os.clock() + math.max(0, tonumber(Config.StartupGrace) or 15)
 	end
 	if os.clock() < scanReadyAt then return false end
+
+	-- ต้องรู้ก่อนว่าเน็ตเครื่องนี้เป็นยังไง ถึงจะเริ่มงานหนักได้
+	--
+	-- นี่คือตัวแก้อาการ "รันรอบแรกโดนเตะ พอรันใหม่กลับผ่านเฉยๆ"
+	-- ของเดิมเริ่มวาปทันทีโดยไม่รู้ว่าสายเน็ตรับไหวไหม
+	-- สายดีก็ผ่าน สายแย่ก็เสี่ยงดวงว่าจังหวะจะชนกับรอบ heartbeat ไหม
+	-- = ผลลัพธ์ไม่แน่นอน รันสิบรอบผ่านหกโดนสี่
+	--
+	-- รอให้รู้เกรดก่อน (ราว 3 วินาที) แล้วค่อยเริ่มด้วยของที่เหมาะกับสายนั้น
+	-- มีเพดานเวลากันไว้ด้วย อ่านค่าหน่วงไม่ได้เลยก็ต้องเดินต่อ ห้ามค้าง
+	if not Hub.netSettled() then
+		if os.clock() - scanReadyAt < 25 then return false end
+		Hub.NetGaveUp = true
+	end
+
 	local c = LocalPlayer.Character
 	local hum = c and c:FindFirstChildOfClass("Humanoid")
 	return hum ~= nil and hum.Health > 0
@@ -2191,6 +2234,373 @@ Hub.checkDevice = function()
 	end)
 end
 
+--==================================================================
+-- ตรวจคุณภาพเน็ตแล้วปรับตัวเอง
+--
+-- ทำไมต้องดู "เน็ต" ไม่ใช่ "ความแรงเครื่อง":
+--   เก็บข้อมูลจากลูกค้าจริงแล้วได้ข้อสรุปที่ชัดมาก
+--     ต่อสายแลน  = ไม่โดนเตะเลยสักคน
+--     WiFi        = โดนบ้าง
+--     เน็ตมือถือแชร์ = โดนหนักสุด
+--   สคริปต์ตัวเดียวกัน ตัวรันเดียวกัน  ต่างกันแค่สายเน็ต
+--
+--   และคนที่โดน พอรันใหม่อีกรอบกลับผ่านเฉยๆ
+--   = ไม่ใช่โค้ดผิดตายตัว ถ้าผิดจริงต้องโดนทุกรอบ  แต่เป็นการชิงจังหวะ
+--
+-- ตัดด่านความเร็วออกไปได้เลย เพราะอ่านโค้ดของเกมแล้วมันทำตรงข้าม:
+--   ทุกจุดที่เทียบระยะจะเช็ค ReliableGapMaximum (0.2 วินาที) ก่อนเสมอ
+--   ตัวอย่างสองอันที่ห่างกันเกินนั้น มันตีเป็น "UnreliableInterval" แล้วข้ามไป
+--   (AxisDelta.luau:184 · Impact.luau:121 · ArcModel.luau:63)
+--   = เน็ตยิ่งแลต ด่านความเร็วยิ่งปล่อยผ่าน ไม่ใช่ยิ่งจับ
+--
+-- เหลือด่านเดียวที่อธิบายได้ครบ คือด่าน heartbeat
+--   Limits ของเกม: HeartbeatInterval 4 · ChallengeExpiry 15 · MaxInvalidHeartbeats 3
+--   ไคลเอนต์ต้องส่งสัญญาณกลับตามรอบ ส่งไม่ทันครบ 3 ครั้งคือโดนเตะ
+--   ด่านนี้วัดด้วย "เวลา" ล้วนๆ จึงเป็นด่านเดียวที่สายเน็ตมีผลโดยตรง
+--
+-- แล้วสคริปต์ไปเกี่ยวยังไง:
+--   สายที่แคบและกระตุกมีคิวขาออกจำกัด  งานของสคริปต์เบียดคิวนั้นอยู่
+--   (เขียนพิกัดทุกเฟรม · ยัดค่าทับตารางกันโกงทุกเฟรม · ยิงรีโมทถี่ · สแกนหน่วยความจำ)
+--   สายแลนคิวโล่ง เบียดยังไงก็ออกทัน  สายมือถือแชร์ไม่มีที่ว่างให้เบียดเลย
+--   เลยกลายเป็นเสี่ยงดวงว่ารอบนี้สัญญาณจะออกทันไหม = รันใหม่แล้วผ่านบ้างไม่ผ่านบ้าง
+--
+-- เน็ตดีไม่แตะอะไรเลย  คนที่ใช้ได้อยู่แล้วต้องไม่ช้าลงแม้แต่นิดเดียว
+--==================================================================
+
+Hub.NetPings = {}
+
+-- อ่านค่าหน่วงปัจจุบัน หน่วยวินาที  อ่านไม่ได้คืน nil
+Hub.pingNow = function()
+	local ok, v = pcall(function() return LocalPlayer:GetNetworkPing() end)
+	if ok and type(v) == "number" and v > 0 and v < 30 then return v end
+
+	-- ทางสำรอง ตัวรันบางตัวเรียกเมธอดนั้นไม่ได้
+	local ok2, v2 = pcall(function()
+		return game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue() / 1000
+	end)
+	if ok2 and type(v2) == "number" and v2 > 0 and v2 < 30 then return v2 end
+
+	return nil
+end
+
+-- สรุปคุณภาพเน็ตจากตัวอย่าง 10 วินาทีล่าสุด
+-- คืน  เกรด · ค่ากลาง · ความกระตุก · จำนวนครั้งที่พุ่ง
+-- ตัวอย่างยังไม่พอคืน nil  ห้ามเดา
+Hub.netGrade = function()
+	local t = Hub.NetPings
+	if #t < 6 then return nil end
+
+	local s = table.create(#t)
+	for i = 1, #t do s[i] = t[i] end
+	table.sort(s)
+
+	local function at(frac)
+		return s[math.clamp(math.ceil(#s * frac), 1, #s)]
+	end
+
+	-- ใช้ค่ากลาง ไม่ใช่ค่าเฉลี่ย  ค่าเฉลี่ยโดนค่าพุ่งครั้งเดียวลากไปทั้งชุด
+	local mid = at(0.5)
+
+	-- ความกระตุกวัดจากช่วง 10%-90%  ไม่ใช่ต่ำสุด-สูงสุด
+	-- ไม่งั้นเน็ตดีที่บังเอิญสะดุดครั้งเดียวจะถูกตัดสินผิด
+	local jit = at(0.9) - at(0.1)
+
+	-- นับครั้งที่หน่วงพุ่งเกินครึ่งวินาที
+	-- ครั้งเดียวก็พอทำให้สัญญาณ heartbeat ออกไม่ทันรอบแล้ว
+	local spike = 0
+	for i = 1, #t do
+		if t[i] >= 0.5 then spike = spike + 1 end
+	end
+
+	local pf = tonumber(Config.NetPingFair)   or 0.12
+	local pp = tonumber(Config.NetPingPoor)   or 0.30
+	local jf = tonumber(Config.NetJitterFair) or 0.06
+	local jp = tonumber(Config.NetJitterPoor) or 0.15
+
+	if mid >= pp or jit >= jp or spike >= 2 then return "poor", mid, jit, spike end
+	if mid >= pf or jit >= jf or spike >= 1 then return "fair", mid, jit, spike end
+	return "good", mid, jit, spike
+end
+
+-- ปรับของตามเกรดเน็ต
+Hub.applyNet = function(grade)
+	if grade == Hub.NetMode then return end
+	local from = Hub.NetMode
+	Hub.NetMode = grade
+	local s = Hub.NetSave or {}
+	local ms = function(v) return math.floor((tonumber(v) or 0) * 1000) end
+
+	if grade == "good" then
+		-- คืนค่าตั้งต้นทุกตัวที่เคยถอยไป
+		Hub.AcWriteGap = 0
+		Config.ImpulseBypass   = s.ImpulseBypass
+		Config.AdoptBaseline   = s.AdoptBaseline
+		Config.KillCorrections = s.KillCorrections
+		Config.PinHold         = s.PinHold
+		Config.FpsBoost        = s.FpsBoost
+		Config.ScanSlowLimit   = s.ScanSlowLimit
+		Config.RemoteGap       = s.RemoteGap
+		Config.RemoteBurst     = s.RemoteBurst
+		if from ~= nil then
+			log(("เน็ตกลับมาดีแล้ว (%d ms) - ปล่อยของเต็ม"):format(ms(Hub.NetPing)))
+		end
+		return
+	end
+
+	if grade == "fair" then
+		-- เน็ตกลางๆ  ยังวิ่งเต็มความเร็วเท่าเดิม
+		--
+		-- ตัวที่ลดจำนวนแพ็กเก็ตขาออกจริงๆ มีตัวเดียวคือความถี่การยิงรีโมท
+		-- ยืดระยะห่างออก = แพ็กเก็ตของเราแย่งคิวกับสัญญาณ heartbeat ของเกมน้อยลง
+		Config.RemoteGap   = math.max(0.20, tonumber(s.RemoteGap) or 0.10)
+		Config.RemoteBurst = math.min(5, tonumber(s.RemoteBurst) or 8)
+
+		-- ส่วนการเขียนตารางกันโกงนั้นเบาลงได้ แต่ต้องเข้าใจให้ถูกว่าเบาอะไร
+		--
+		-- [แก้ความเข้าใจผิด] มันไม่ได้กินแบนด์วิดท์
+		-- เกมส่งสถานะขึ้นเซิร์ฟตามรอบของมันเอง ไม่ใช่ตอนที่เราเขียนลงตาราง
+		-- ที่ลดได้คือภาระ CPU บนเธรดหลัก ซึ่งก็สำคัญ เพราะเธรดหลักที่ตัน
+		-- ทำให้โค้ดของเกมที่ต้องส่งสัญญาณ heartbeat ถูกเลื่อนคิวไปด้วย
+		--
+		-- เพดานคือ 0.04 วินาที ห้ามเกินนี้เด็ดขาด
+		-- ตัวเก็บตัวอย่างของเกมทำงาน 20 ครั้ง/วินาที (TickInterval 0.05)
+		-- ทุกจังหวะที่มันเก็บ ต้องเห็นค่าที่เราเขียนไว้แล้ว
+		-- ตั้ง 0.04 เพื่อกันจังหวะเหลื่อม ไม่ให้มีรอบไหนหลุดไปโดยไม่มีค่า
+		--
+		-- เคยตั้ง 0.25 ตอนแรกเพราะคิดว่าค่ามีอายุ 5 วินาทีอยู่แล้ว ซึ่งผิด
+		-- เกมล้าง ImpulseContext ทิ้งเองเมื่อไหร่ก็ได้ (Impact.luau:424 · 430)
+		-- เราต้องเขียนกลับให้ทันก่อนรอบเก็บตัวอย่างถัดไป
+		-- ที่ 0.25 จุดอ้างอิงจะตกหลังถึง 175 studs และหลักฐานความเร็วขึ้นถึงเกณฑ์
+		-- ภายใน 0.267 วินาที = โดนลากกลับ ซึ่งคือสิ่งที่โค้ดนี้มีไว้กันตั้งแต่แรก
+		Hub.AcWriteGap = 0.04
+
+		log(("เน็ตกลางๆ (%d ms กระตุก %d ms) - ยิงรีโมทห่างขึ้น ความเร็วเท่าเดิม")
+			:format(ms(Hub.NetPing), ms(Hub.NetJitter)))
+		return
+	end
+
+	-- เน็ตแย่  ต้องเลิกแตะระบบของเกมทั้งหมด ไม่ใช่แค่ลดความถี่
+	--
+	-- ทุกอย่างที่เราเขียนลงตารางกันโกง ต้องถูกส่งขึ้นเซิร์ฟไปพร้อมสัญญาณ heartbeat
+	-- สายที่ส่งไม่ทันอยู่แล้ว ยิ่งใส่ของเพิ่มยิ่งไม่ทัน
+	-- ยอมช้าดีกว่าโดนเตะ  ฟาร์มช้าๆ ยังได้ของ โดนเตะคือไม่ได้อะไรเลย
+	Hub.AcWriteGap         = 0
+	Config.ImpulseBypass   = false   -- วิ่งเท่าที่กฎยอม ไม่ยัดค่าปลอม
+	Config.AdoptBaseline   = false   -- ไม่เขียนตารางกันโกงทุกเฟรม
+	Config.KillCorrections = false
+	Config.PinHold         = false   -- ไม่ตรึงพิกัดทุกเฟรม
+	Config.FpsBoost        = false
+	Config.ScanSlowLimit   = 0.01    -- ไม่สแกนหน่วยความจำ ไม่บล็อกเธรดหลัก
+	Hub.ScanTooSlow        = true
+	Config.RemoteGap       = math.max(0.35, tonumber(s.RemoteGap) or 0.10)
+	Config.RemoteBurst     = math.min(3, tonumber(s.RemoteBurst) or 8)
+	log(("เน็ตแย่ (%d ms กระตุก %d ms) - ถอยไปโหมดปลอดภัย ช้าลงแต่ไม่โดนเตะ")
+		:format(ms(Hub.NetPing), ms(Hub.NetJitter)))
+end
+
+-- เน็ตนิ่งพอจะเริ่มทำงานหนักหรือยัง
+--
+-- ใช้แทนการนั่งรอเวลาตายตัว  เน็ตดีผ่านทันที เน็ตแย่รอเท่าที่จำเป็น
+-- ตอนเพิ่งเข้าเกมค่าหน่วงจะพุ่งอยู่พักหนึ่งเพราะกำลังโหลดฉากอยู่
+-- เริ่มวาปทับช่วงนั้นพอดีคือจังหวะที่แย่ที่สุด
+Hub.netSettled = function()
+	if Config.AutoNetMode == false then return true end
+
+	-- เริ่มเฝ้าเองถ้ายังไม่มีใครเริ่ม  ห้ามรอคนอื่นมาปลุก
+	-- ไม่งั้นถ้าลำดับการเรียกเปลี่ยนเมื่อไหร่ ตัวนี้จะรอค้างตลอดกาล
+	if not Hub.NetChecked then pcall(Hub.checkNetwork) end
+
+	-- พอรู้เกรดแล้วถือว่าพร้อม เพราะโหมดที่เหมาะถูกตั้งให้เรียบร้อยแล้ว
+	-- เน็ตแย่ไม่ได้แปลว่าห้ามเริ่ม แต่แปลว่าต้องเริ่มแบบถอยของ
+	-- ที่ต้องรอจริงๆ คือช่วงที่ยังไม่รู้ว่าเน็ตเป็นยังไง (ราว 3 วินาทีแรก)
+	-- เริ่มวาปทั้งที่ยังไม่รู้ = เสี่ยงดวงแบบเดิม
+	return Hub.netGrade() ~= nil
+end
+
+Hub.checkNetwork = function()
+	if Config.AutoNetMode == false then return end
+	if Hub.NetChecked then return end
+	Hub.NetChecked = true
+
+	-- จำค่าตั้งต้นไว้ก่อนแตะอะไร  จะได้คืนกลับได้ตอนเน็ตดีขึ้น
+	Hub.NetSave = {
+		ImpulseBypass   = Config.ImpulseBypass,
+		AdoptBaseline   = Config.AdoptBaseline,
+		KillCorrections = Config.KillCorrections,
+		PinHold         = Config.PinHold,
+		FpsBoost        = Config.FpsBoost,
+		ScanSlowLimit   = Config.ScanSlowLimit,
+		RemoteGap       = Config.RemoteGap,
+		RemoteBurst     = Config.RemoteBurst,
+	}
+	Hub.NetMode = "good"
+
+	task.spawn(function()
+		-- เฝ้าตลอด ไม่ใช่วัดครั้งเดียวตอนเริ่ม
+		-- เน็ตมือถือแชร์ดีสลับแย่เป็นช่วงๆ วัดครั้งเดียวจึงตัดสินผิดได้ง่าย
+		while true do
+			local p = Hub.pingNow()
+			if p then
+				local t = Hub.NetPings
+				t[#t + 1] = p
+				while #t > 20 do table.remove(t, 1) end
+			end
+
+			local g, mid, jit, spike = Hub.netGrade()
+			if g then
+				Hub.NetPing, Hub.NetJitter, Hub.NetSpike = mid, jit, spike
+
+				local rank = { good = 1, fair = 2, poor = 3 }
+				local cur  = rank[Hub.NetMode] or 1
+				local want = rank[g] or 1
+
+				if want > cur then
+					-- แย่ลง = ถอยทันที ไม่รอดูอีก
+					-- รอดูแปลว่ายอมเสี่ยงโดนเตะระหว่างรอ
+					Hub.NetBetterAt = nil
+					Hub.applyNet(g)
+				elseif want < cur then
+					-- ดีขึ้น = ต้องนิ่งครบ 60 วินาทีก่อนถึงจะปล่อยของเต็ม
+					-- ไม่งั้นเน็ตที่วูบดีวูบแย่จะทำให้สลับโหมดไปมาทั้งวัน
+					Hub.NetBetterAt = Hub.NetBetterAt or os.clock()
+					if os.clock() - Hub.NetBetterAt >= 60 then
+						Hub.NetBetterAt = nil
+						Hub.applyNet(g)
+					end
+				else
+					Hub.NetBetterAt = nil
+				end
+			end
+
+			task.wait(0.5)
+		end
+	end)
+end
+
+-- เช็คสายเน็ตของเครื่องนี้ได้ทุกเมื่อ  ใช้ตอนลูกค้าบอกว่าโดนเตะ
+--     getgenv().NETINFO()
+--
+-- ให้ลูกค้ารันแล้วส่งผลมา จะได้รู้ว่าเขาอยู่กลุ่มไหนจริงๆ
+-- ไม่ต้องเดาว่า "น่าจะเน็ตไม่ดี" อีกต่อไป
+Hub.netInfo = function()
+	local g, mid, jit, spike = Hub.netGrade()
+	local ms = function(v) return math.floor((tonumber(v) or 0) * 1000) end
+	local name = { good = "ดี", fair = "กลางๆ", poor = "แย่" }
+
+	print(("[เน็ต] เกรด=%s  หน่วง=%d ms  กระตุก=%d ms  พุ่งเกินครึ่งวิ=%s ครั้ง  เก็บตัวอย่าง=%d")
+		:format(name[g] or "ยังไม่รู้", ms(mid), ms(jit), tostring(spike or 0), #Hub.NetPings))
+	print(("[เน็ต] โหมดที่ใช้อยู่=%s  เร่งความเร็ว=%s  ยิงรีโมทห่าง=%s วิ (สูงสุด %s ครั้ง/วิ)")
+		:format(tostring(Hub.NetMode), tostring(Config.ImpulseBypass),
+			tostring(Config.RemoteGap), tostring(Config.RemoteBurst)))
+
+	if Hub.NetGaveUp then
+		print("[เน็ต] อ่านค่าหน่วงไม่ได้เลย เลยเดินต่อโดยไม่ปรับอะไร")
+	end
+	if g == "poor" then
+		print("[เน็ต] สายนี้คือกลุ่มที่โดนเตะ ต่อสายแลนหรือย้าย WiFi ให้ใกล้เราเตอร์จะหายขาด")
+	end
+	return g, mid, jit
+end
+-- ห้ามประกาศ local ตรงนี้เด็ดขาด  ต้องห่อไว้ในฟังก์ชันเท่านั้น
+--
+-- Luau จำกัด local ของก้อนบนสุดไว้ที่ 200 ตัว ไฟล์นี้เกือบเต็มแล้ว
+-- เพิ่มเกินเมื่อไหร่ทั้งไฟล์คอมไพล์ไม่ผ่าน โดยไม่ขึ้น error อะไรให้เห็น
+-- อาการคือ "รันแล้วเงียบ ไม่มีอะไรเกิดขึ้น" ซึ่งหาสาเหตุยากมาก
+-- (เคยพลาดมาแล้วจากการเพิ่มแค่ 3 ตัว)
+pcall(function()
+	if type(getgenv) == "function" then getgenv().NETINFO = Hub.netInfo end
+end)
+_G.NETINFO = Hub.netInfo
+
+--==================================================================
+-- ปิดป๊อปอัปที่บังจอ
+--
+-- ป๊อปอัป "Join Event / MONSTERS ARE COMING" เป็น UI ของ Roblox เอง
+-- อยู่ใน CoreGui ไม่ใช่ของเกม  จึงหาใน PlayerGui ไม่เจอ
+--
+-- ทำไมจับจากข้อความ ไม่จับจาก path:
+--   Roblox เปลี่ยนโครงสร้าง CoreGui บ่อย ชื่อโหนดไม่คงที่
+--   แต่ข้อความบนปุ่มกับหัวเรื่องเปลี่ยนน้อยกว่ามาก
+--   จับจากข้อความจึงทนต่อการอัปเดตมากกว่า
+--
+-- ทำไมไม่ปิด RobloxPromptGui ทั้งก้อน:
+--   ก้อนนั้นใช้ร่วมกับ prompt อื่นของ Roblox ด้วย (ยืนยันซื้อของ ฯลฯ)
+--   ปิดทั้งก้อนคือปิดของที่จำเป็นไปด้วย  ซ่อนเฉพาะเฟรมที่ตรงเท่านั้น
+--==================================================================
+Hub.PopupWords = {
+	"JOIN EVENT",
+	"NOTIFY ME",
+	"MONSTERS ARE COMING",
+}
+
+-- ไล่ขึ้นไปหาเฟรมที่ครอบข้อความนั้นอยู่ แล้วซ่อนเฉพาะตัวนั้น
+local function hideOwner(node, root)
+	local cur, best = node, nil
+	for _ = 1, 8 do
+		if not cur or cur == root then break end
+		if cur:IsA("Frame") or cur:IsA("ImageLabel") or cur:IsA("CanvasGroup") then
+			best = cur
+		end
+		cur = cur.Parent
+	end
+	if best then
+		local ok = pcall(function() best.Visible = false end)
+		if ok then return true end
+	end
+	return false
+end
+
+Hub.closePopups = function()
+	if Config.AutoClosePopup == false then return 0 end
+	local closed = 0
+
+	local roots = {}
+	local okc, cg = pcall(function() return game:GetService("CoreGui") end)
+	if okc and cg then roots[#roots + 1] = cg end
+	local pg = LocalPlayer:FindFirstChild("PlayerGui")
+	if pg then roots[#roots + 1] = pg end
+
+	for _, root in ipairs(roots) do
+		local okd, list = pcall(function() return root:GetDescendants() end)
+		if okd and type(list) == "table" then
+			for _, d in ipairs(list) do
+				local okt, txt = pcall(function()
+					return (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text or nil
+				end)
+				if okt and type(txt) == "string" and txt ~= "" then
+					local up = txt:upper()
+					for _, w in ipairs(Hub.PopupWords) do
+						if up:find(w, 1, true) then
+							if hideOwner(d, root) then
+								closed = closed + 1
+								Hub.PopupClosed = (Hub.PopupClosed or 0) + 1
+								Hub.PopupLast = txt:sub(1, 30)
+							end
+							break
+						end
+					end
+				end
+			end
+		end
+	end
+
+	-- ป๊อปอัปอีเวนต์ของเกมเอง  ปิดตรงๆ ได้เลยเพราะรู้ชื่อแน่นอน
+	if pg then
+		for _, name in ipairs({ "SakuraEventTutorialFrame", "DragonEggEventUI" }) do
+			local g = pg:FindFirstChild(name)
+			if g and g:IsA("ScreenGui") and g.Enabled then
+				if pcall(function() g.Enabled = false end) then
+					closed = closed + 1
+					Hub.PopupClosed = (Hub.PopupClosed or 0) + 1
+					Hub.PopupLast = name
+				end
+			end
+		end
+	end
+
+	return closed
+end
+
 -- เก็บรางวัล Pet Index (ปุ่ม CLAIM ALL ในหน้า Pet Index)
 --
 -- รางวัลสะสมจากการค้นพบสัตว์ชนิดใหม่ ให้ speed กับเงิน
@@ -2679,8 +3089,21 @@ task.spawn(function()
 				pcall(Hub.clearTreadmillState, true)
 			end
 
+			-- ปิดป๊อปอัปที่บังจอ  ทุก 2 วินาที
+			-- ไล่ GetDescendants ของ CoreGui ซึ่งไม่ใหญ่ ไม่กินแรงจนสังเกตได้
+			if Config.AutoClosePopup ~= false then
+				if not Hub.PopupAt or os.clock() - Hub.PopupAt >= 2 then
+					Hub.PopupAt = os.clock()
+					pcall(Hub.closePopups)
+				end
+			end
+
 			-- ตรวจแรงเครื่องครั้งเดียวตอนเริ่ม (ดู Hub.checkDevice)
 			pcall(Hub.checkDevice)
+
+			-- เริ่มเฝ้าคุณภาพเน็ต (ดู Hub.checkNetwork)
+			-- ตัวนี้เฝ้าตลอด ไม่ใช่วัดครั้งเดียว เพราะเน็ตมือถือดีสลับแย่เป็นช่วงๆ
+			pcall(Hub.checkNetwork)
 
 			-- เก็บรางวัล Pet Index ทุก 60 วินาที
 			-- ยิงครั้งเดียวจบ ไม่มีของก็คืนค่าไม่ใช่ true ไม่เปลืองอะไร
@@ -3366,6 +3789,9 @@ Hub.expireImpulse = function()
 		ic.ExpiresAt = -1
 	end)
 	if ok then Hub.Expired = (Hub.Expired or 0) + 1 end
+	-- ล้างตัวจับเวลาเว้นระยะด้วย  ตั้งใจให้หมดอายุแล้วต้องเขียนใหม่ได้ทันที
+	-- ไม่งั้น armImpulse จะคืนค่าที่จำไว้แล้วไม่ยอมเขียนจริง (ดู Hub.AcWriteGap)
+	Hub.ImpulseAt = nil
 	return ok
 end
 
@@ -3562,6 +3988,24 @@ end
 
 Hub.armImpulse = function(hrp)
 	if Config.ImpulseBypass == false then return false end
+
+	-- เว้นระยะได้นิดหน่อยตอนเน็ตไม่ดี  แต่ห้ามเว้นเยอะ
+	--
+	-- ที่ประหยัดคือ CPU บนเธรดหลัก ไม่ใช่แบนด์วิดท์
+	-- เกมส่งสถานะขึ้นเซิร์ฟตามรอบของมันเอง ไม่ใช่ตอนที่เราเขียนลงตารางนี้
+	-- แต่เธรดหลักที่ตันก็ทำให้โค้ดส่ง heartbeat ของเกมถูกเลื่อนคิวไปด้วย
+	--
+	-- เพดานคือ 0.04 วินาที (ตั้งที่ Hub.applyNet) ห้ามเกิน
+	-- เกมเก็บตัวอย่างตำแหน่ง 20 ครั้ง/วินาที และมันล้าง ImpulseContext ทิ้งเองได้
+	-- ทุกครั้งที่เจอความผิดหรือหมดอายุ (Impact.luau:424 · 430)
+	-- เราต้องเขียนกลับให้ทันก่อนรอบเก็บถัดไป ไม่งั้นมีรอบที่ไม่มีเกราะเลย
+	--
+	-- เน็ตดี AcWriteGap = 0 คือเขียนทุกเฟรมเหมือนเดิมเป๊ะ ไม่มีใครช้าลง
+	local gap = tonumber(Hub.AcWriteGap) or 0
+	if gap > 0 and Hub.ImpulseAt and (os.clock() - Hub.ImpulseAt) < gap then
+		return Hub.ImpulseOK == true
+	end
+
 	local st = Hub.acState()
 	if not st then return false end
 	local last = st.LastSample or st.LastObservedSample
@@ -3580,6 +4024,7 @@ Hub.armImpulse = function(hrp)
 		}
 	end)
 	if okw then Hub.ImpulseArmed = (Hub.ImpulseArmed or 0) + 1 end
+	Hub.ImpulseAt, Hub.ImpulseOK = os.clock(), okw
 	return okw
 end
 
@@ -3603,6 +4048,19 @@ end
 -- ตารางสถานะและ sample ตรวจแล้วว่าไม่ถูกล็อก (table.isfrozen = false) เขียนทับได้ตรงๆ
 -- ไม่ต้องครอบทับฟังก์ชันของเกม ไม่ต้องใช้ฟังก์ชันพิเศษของตัวรัน
 Hub.adoptBaseline = function()
+	-- เว้นระยะเหมือน armImpulse ตอนเน็ตไม่ดี (ดู Hub.AcWriteGap)
+	-- ตัวนี้เขียนทีเดียว 8 ฟิลด์ทุกเฟรม จึงกิน CPU มากกว่า armImpulse อีก
+	--
+	-- เพดานเดียวกันคือ 0.04 วินาที และตัวนี้เข้มกว่าด้วยซ้ำ
+	-- เพราะ LastGoodSample คือ "จุดที่ระบบจะลากเรากลับไป" ตรงๆ
+	-- ปล่อยให้ตกหลังหนึ่งรอบเก็บตัวอย่างที่ความเร็ว 700 = ตกหลัง 35 studs
+	-- ถ้าเว้นถึง 0.25 วินาที = ตกหลัง 175 studs และหลักฐานความเร็วขึ้นถึงเกณฑ์
+	-- ภายใน 0.267 วินาที = โดนลากกลับจริง
+	local gap = tonumber(Hub.AcWriteGap) or 0
+	if gap > 0 and Hub.AdoptAt and (os.clock() - Hub.AdoptAt) < gap then
+		return Hub.AdoptOK == true
+	end
+
 	local st = Hub.ACState or (Hub.acState and Hub.acState())
 	if type(st) ~= "table" then return false end
 	local s = rawget(st, "LastObservedSample")
@@ -3634,6 +4092,7 @@ Hub.adoptBaseline = function()
 		end
 	end)
 	if ok then Hub.Adopted = (Hub.Adopted or 0) + 1 end
+	Hub.AdoptAt, Hub.AdoptOK = os.clock(), ok
 	return ok
 end
 
@@ -3797,8 +4256,22 @@ Hub.glide = function(hrp, hum, dest)
 				Hub.BrakeHits = (Hub.BrakeHits or 0) + 1
 				Hub.Phase = ("ชะลอ - ระบบเริ่มจับได้ (%s %.0f%%)")
 					:format(tostring(Hub.DangerFrom), danger * 100)
-				-- ลองปลุก ImpulseContext ใหม่ก่อน เผื่อแค่หมดอายุเฉยๆ
-				pcall(Hub.armImpulse, hrp)
+				-- [ตัดทิ้งแล้ว] เดิมตรงนี้เรียก pcall(Hub.armImpulse, hrp)
+				--
+				-- เหตุผลที่ตัดมีสองข้อ  ข้อหลังคือบั๊กจริง
+				--
+				-- 1. เขียนซ้ำในเฟรมเดียวกันเปล่าๆ
+				--    บรรทัด "if boosted then Hub.armImpulse(hrp) end" ข้างบน
+				--    เพิ่งเขียนไปแล้วในรอบนี้ และระหว่างสองจุดไม่มีอะไรหยุดรอเลย
+				--    ค่าที่จะเขียนจึงเหมือนเดิมทุกฟิลด์  แถม Hub.acDanger เอง
+				--    ก็จำคำตอบไว้ 0.25 วินาที = ตัดสินใจเดิมถูกรันซ้ำ 15 รอบ
+				--
+				-- 2. มันเขียนแม้ตอนที่ห้ามเขียน
+				--    เครื่องที่ปะตัวตรวจจับไม่ติดจะได้ boosted = false
+				--    ซึ่งกฎที่เขียนไว้เองข้างบนคือ "ห้ามยัดค่าปลอมแม้แต่ครั้งเดียว"
+				--    เพราะ TamperKickThreshold = 2 คือสองครั้งก็โดนแล้ว
+				--    แต่บรรทัดนี้เรียกดื้อๆ ไม่ดู boosted เลย 60 ครั้ง/วินาที
+				--    = ยิงใส่เครื่องกลุ่มที่กฎนั้นตั้งใจปกป้องพอดี
 				if allowed and allowed > 0 then
 					speed = math.max(16, allowed * (tonumber(Config.SpeedSafety) or 0.9))
 				else
