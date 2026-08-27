@@ -705,6 +705,18 @@ local Config = {
 	-- หลบกับดักที่คนอื่นวางไว้ระหว่างเดินทาง (ดู Hub.trapList)
 	DodgeTraps = true,
 
+	-- หลบการ์ดที่เฝ้าไข่ด้วย (ดู Hub.guardAt)
+	--
+	-- ชนการ์ดตอนแบกไข่กลับ = ไข่หล่น ต้องไปเก็บใหม่หรือเสียไปเลย
+	-- ตัวนี้เบี่ยงออกข้างเท่าที่พอพ้นตัวมัน ไม่ได้หยุด ไม่ได้เปลี่ยนเป้า
+	--
+	-- การ์ดที่ยืนคร่อมไข่ที่เราจะไปเก็บ จะไม่ถูกหลบ ไม่งั้นเข้าไปเก็บไม่ได้เลย
+	DodgeGuards = true,
+
+	-- เบี่ยงห่างจากขอบตัวการ์ดกี่ studs
+	-- น้อยไปเฉี่ยวโดน  มากไปอ้อมไกลเสียเวลา
+	GuardMargin = 8,
+
 	-- ซื้อ Trail อัตโนมัติ  เอาตัวที่เร่ง speed สูงสุดที่เงินถึง (ดู Hub.buyBestTrail)
 	AutoTrail = true,
 
@@ -991,15 +1003,129 @@ Config.MoveMode = "warp"
 -- WaitForChild แบบไม่ใส่เวลา = ถ้าเกมเปลี่ยนชื่อโฟลเดอร์เมื่อไหร่ สคริปต์ค้างตรงนี้ตลอดกาล
 -- ไม่ error ไม่ log ไม่มีอะไรเกิดขึ้น ผู้ใช้เห็นแค่ "รันแล้วไม่ขึ้นอะไรเลย"
 -- ใส่เวลาไว้ 20 วินาที หมดเวลาแล้วค่อยบอกให้รู้ว่าเกิดอะไรขึ้น
-local Net = ReplicatedStorage:WaitForChild("Network", 20)
-if not Net then
-	warn("[Hamsterdiwa] หา ReplicatedStorage.Network ไม่เจอใน 20 วินาที - เกมอาจเปลี่ยนโครงสร้าง")
-	return
+--==================================================================
+-- รองรับโครงสร้างเกมสองแบบ  (เกมรื้อใหม่ทั้งชุดเมื่อ 26/8/2569)
+--
+-- ที่เกิดขึ้น: อยู่ๆ สคริปต์ก็รันไม่ติด ไม่มี error ไม่มีอะไรขึ้นเลย
+-- สาเหตุคือบรรทัดนี้รอ ReplicatedStorage.Network ซึ่งถูกลบไปแล้ว
+-- รอครบ 20 วินาทีแล้ว return ทิ้งทั้งไฟล์เงียบๆ
+--
+-- เกมย้ายของใหม่หมด:
+--     ReplicatedStorage.Network        ->  ReplicatedStorage.Packages.Networking
+--     ReplicatedStorage.Library.Client ->  ReplicatedStorage.Shared
+--     ReplicatedStorage.Library.Util   ->  ReplicatedStorage.Shared.Util
+--     ReplicatedStorage.Library.Signal ->  ReplicatedStorage.Packages.Signal
+--     ReplicatedStorage.Directory      ->  ReplicatedStorage.Data
+--
+-- และเปลี่ยนชื่อรีโมททุกตัวเป็นรูปแบบใหม่ RE/RF แล้วตามด้วยโดเมน
+--     "Eggs: RequestHatchEgg"      ->  "RF/EggWorld/AskHatch"
+--     "Plots: RequestState"        ->  "RF/Homestead/AskState"
+--     "ActiveAssets: RequestSell"  ->  "RF/PenRoster/AskSale"
+--
+-- ไม่ไล่แก้ทีละจุดทั้งไฟล์ แต่ทำชั้นแปลชื่อไว้ที่เดียว
+-- โค้ดส่วนอื่นเรียกชื่อเดิมได้ต่อไปโดยไม่ต้องแตะ
+-- เกมเปลี่ยนอีกกี่รอบก็มาแก้แค่ตารางเดียว
+--==================================================================
+
+-- หาโหนดจากหลายเส้นทาง เจอเส้นไหนก่อนใช้เส้นนั้น
+-- เขียนเป็นข้อความคั่นด้วยจุด เช่น "Shared.Util.AssetEarnings"
+Hub.pick = function(...)
+	for _, path in ipairs({ ... }) do
+		local node = ReplicatedStorage
+		for seg in tostring(path):gmatch("[^%.]+") do
+			node = node and node:FindFirstChild(seg)
+		end
+		if node then return node end
+	end
+	return nil
 end
 
-local function remote(name)
-	return Net:FindFirstChild(name, true)
+-- ตารางแปลชื่อรีโมท  ชื่อเดิม -> ชื่อใหม่
+Hub.NetMap = {
+	["Eggs: RequestAreaEggSnapshot"]               = "RF/EggWorld/AskFieldEggSnapshot",
+	["Eggs: RequestAreaEggCarry"]                  = "RF/EggWorld/AskFieldEggCarry",
+	["Eggs: RequestCarryAreaEgg"]                  = "RF/EggWorld/AskFieldEggCarry",
+	["Eggs: RequestPlaceEgg"]                      = "RF/EggWorld/AskPlaceEgg",
+	["Eggs: RequestRuntimeSnapshot"]               = "RF/EggWorld/AskLiveSnapshot",
+	["Eggs: RequestHatchEgg"]                      = "RF/EggWorld/AskHatch",
+	["Eggs: RequestCompleteHatchEgg"]              = "RF/EggWorld/AskFinishHatch",
+	["Eggs: RequestAreaEggRareSpawnPresentations"] = "RF/EggWorld/AskFieldEggRarityShows",
+	["Eggs: AreaEggRareSpawnsRevealed"]            = "RE/EggWorld/FieldEggRaritiesShown",
+	["Eggs: AreaEggCarryState"]                    = "RE/EggWorld/FieldEggCarry",
+
+	["Plots: RequestState"]                        = "RF/Homestead/AskState",
+	["Plots: RequestBaseUpgrade"]                  = "RE/Homestead/AskBaseTierRaise",
+
+	["ActiveAssets: RequestEquip"]                 = "RF/PenRoster/AskWear",
+	["ActiveAssets: RequestEquipLimit"]            = "RF/PenRoster/AskWearLimit",
+	["ActiveAssets: RequestSell"]                  = "RF/PenRoster/AskSale",
+	["Backpack: EquipBest"]                        = "RF/Haul/WearBest",
+
+	["Index: RequestClaimAll"]                     = "RF/Codex/AskRedeemAll",
+
+	["Settings: Request Update"]                   = "RF/Preferences/AskWrite",
+
+	["Trails: RequestPurchase"]                    = "RF/Trailwear/AskPurchase",
+	["Trails: RequestSelect"]                      = "RF/Trailwear/AskChoose",
+
+	["Treadmills: RequestEquipStatic"]             = "RF/Treadmill/AskWearStill",
+	["Treadmills: RequestUnequip"]                 = "RF/Treadmill/AskDoff",
+	["Treadmills: RequestUpgrade"]                 = "RF/Treadmill/AskTierRaise",
+	["Treadmills: ActiveTreadmillChanged"]         = "RE/Treadmill/AssignedBeltShifted",
+}
+
+local Net = Hub.pick("Packages.Networking", "Network")
+if not Net then
+	-- ยังไม่มาถึงไคลเอนต์ รอได้ แต่ต้องมีกำหนดเสมอ ห้ามรอไม่จบแบบเดิม
+	pcall(function() ReplicatedStorage:WaitForChild("Packages", 15) end)
+	Net = Hub.pick("Packages.Networking", "Network")
 end
+if not Net then
+	warn("[Hamsterdiwa] หาที่เก็บรีโมทของเกมไม่เจอ (ทั้ง Packages.Networking และ Network)")
+	warn("[Hamsterdiwa] เกมน่าจะเปลี่ยนโครงสร้างอีกรอบ - แจ้งผู้ดูแลสคริปต์ได้เลย")
+	return
+end
+Hub.NetRoot = Net
+Hub.NetIsNew = (Net.Name == "Networking")
+
+-- ลองชื่อเดิมก่อนเสมอ เผื่อเจอเซิร์ฟเวอร์รุ่นเก่าที่ยังไม่อัปเดต
+-- ไม่เจอค่อยแปลเป็นชื่อใหม่  รองรับทั้งสองโครงพร้อมกันโดยไม่ต้องเลือก
+Hub.NetMissing = {}
+local function remote(name)
+	local r = Net:FindFirstChild(name, true)
+	if r then return r end
+
+	local alt = Hub.NetMap[name]
+	if alt then
+		r = Net:FindFirstChild(alt, true)
+		if r then return r end
+	end
+
+	-- จดไว้ว่าตัวไหนหา ไม่เจอ  ดูได้ที่ getgenv().NETMISS()
+	-- ไม่ warn ทุกตัวเพราะบางตัวเป็นของเสริมที่ไม่มีก็ทำงานได้
+	Hub.NetMissing[name] = alt or "(ไม่มีในตารางแปล)"
+	return nil
+end
+
+-- เปิดให้โค้ดส่วนอื่นเรียกได้ด้วย  เดิมหลายจุดไปหา ReplicatedStorage.Network เอง
+-- ซึ่งพังหมดตอนเกมย้ายที่ ตอนนี้ทุกจุดวิ่งผ่านตัวเดียวกันแล้ว
+Hub.remote = remote
+
+-- ดูว่ามีรีโมทตัวไหนหาไม่เจอบ้าง  ใช้ตอนเกมอัปเดตแล้วบางฟีเจอร์หาย
+--     getgenv().NETMISS()
+pcall(function()
+	local fn = function()
+		local n = 0
+		for old, new in pairs(Hub.NetMissing) do
+			n = n + 1
+			print(("[รีโมทหาไม่เจอ] %s  ->  %s"):format(old, new))
+		end
+		print(("[รีโมท] ที่เก็บ=%s  โครงใหม่=%s  หาไม่เจอ %d ตัว")
+			:format(tostring(Hub.NetRoot and Hub.NetRoot:GetFullName()), tostring(Hub.NetIsNew), n))
+	end
+	if type(getgenv) == "function" then getgenv().NETMISS = fn end
+	_G.NETMISS = fn
+end)
 
 local snapF      = remote("Eggs: RequestAreaEggSnapshot")
 local carryF     = remote("Eggs: RequestAreaEggCarry")
@@ -1029,9 +1155,27 @@ local function need(path, name)
 	return nil
 end
 
-local Bases = need(ReplicatedStorage.Directory.Bases, "Bases")
-local Save  = need(ReplicatedStorage.Library.Client.Save, "Save")
-local AGU   = need(ReplicatedStorage.Library.Util.AssetGenerationUtil, "AssetGenerationUtil")
+-- เส้นทางใหม่มาก่อน เส้นทางเดิมเป็นตัวสำรอง (ดูเหตุผลที่ Hub.pick)
+local Bases = need(Hub.pick("Data.Bases", "Directory.Bases"), "Bases")
+local Save  = need(Hub.pick("Shared.Save", "Library.Client.Save", "Library.Save"), "Save")
+local AGU   = need(Hub.pick("Shared.Util.AssetEarnings",
+	"Library.Util.AssetGenerationUtil"), "AssetGenerationUtil")
+
+-- โมดูลคิดรายได้เปลี่ยนชื่อฟังก์ชันด้วย ไม่ใช่แค่ย้ายที่
+--     AssetGenerationUtil.GetRateWithoutRebirth  ->  AssetEarnings.RatePerSecond
+-- รับตารางหน้าตาเดิมเป๊ะ {Category, Scale, Mutations, HasBeenFirstPlaced}
+-- ทดสอบสดแล้วคืนตัวเลขเหมือนเดิม
+--
+-- ทำสะพานชื่อเดิมคลุมไว้ โค้ดอีก 6 จุดในไฟล์จะได้ไม่ต้องแก้
+if AGU and type(rawget(AGU, "GetRateWithoutRebirth")) ~= "function" then
+	local fn = AGU.RatePerSecond or AGU.LiveRatePerSecond or AGU.CatalogRatePerSecond
+	if type(fn) == "function" then
+		-- ห่อเป็นตารางใหม่ ไม่เขียนทับของเกม (ของเกมอาจถูกล็อกไว้)
+		AGU = setmetatable({ GetRateWithoutRebirth = fn }, { __index = AGU })
+	else
+		warn("[Hamsterdiwa] โมดูลคิดรายได้ของเกมเปลี่ยนไป - ตัวเลขราคาสัตว์อาจไม่ขึ้น")
+	end
+end
 
 if not (Bases and Save and AGU) then
 	warn("[Hamsterdiwa] ขาดโมดูลของเกม หยุดทำงานเพื่อไม่ให้พังต่อ")
@@ -2111,8 +2255,8 @@ Hub.TREAD_EQUIP = "Treadmills: RequestEquipStatic"
 -- ไม่ผ่าน Network.Fired ของเกม เพราะตัวนั้นจะไปสร้าง BindableEvent ผูกบัญชีไว้ด้วย
 Hub.watchTreadmill = function()
 	if Hub.TreadHooked then return true end
-	local net = ReplicatedStorage:FindFirstChild("Network")
-	local ev = net and net:FindFirstChild(TREAD_CHANGED)
+	local net = Hub.NetRoot   -- รองรับโครงใหม่ด้วย (ดู Hub.pick)
+	local ev = Hub.remote(TREAD_CHANGED)
 	if not ev or not ev:IsA("RemoteEvent") then return false end
 
 	ev.OnClientEvent:Connect(function(name)
@@ -2512,6 +2656,48 @@ pcall(function()
 end)
 _G.NETINFO = Hub.netInfo
 
+-- เปิดสถานะภายในให้ดูได้  ใช้ตอนลูกค้าบอกว่า "รันแล้วไม่ขึ้นอะไรเลย"
+--     getgenv().HMD.Phase      กำลังทำอะไรอยู่
+--     getgenv().HMD.Build      รุ่นไหน
+--     getgenv().HMD.NetMissing รีโมทตัวไหนหาไม่เจอ
+--     getgenv().HMDSTATUS()    สรุปทุกอย่างในบรรทัดเดียว
+--
+-- ที่ต้องมี: ตอนเกมรื้อโครงเมื่อ 26/8/2569 สคริปต์ตายเงียบสนิท
+-- ไม่มีทางรู้เลยว่าตายตรงไหน ต้องไล่หาด้วยการยิงโค้ดเข้าไปดูทีละจุด
+-- มีช่องนี้แล้วครั้งหน้าถามลูกค้าบรรทัดเดียวจบ
+pcall(function()
+	Hub.status = function()
+		print(("[HMD] รุ่น=%s  ทำงาน=%s  กำลังทำ=%s")
+			:format(tostring(Hub.Build), tostring(Config.Running), tostring(Hub.Phase)))
+		print(("[HMD] รีโมท=%s  หาไม่เจอ=%d ตัว  เน็ต=%s")
+			:format(tostring(Hub.NetRoot and Hub.NetRoot.Name), (function()
+				local n = 0 ; for _ in pairs(Hub.NetMissing or {}) do n = n + 1 end ; return n
+			end)(), tostring(Hub.NetMode)))
+		print(("[HMD] ไข่เก็บได้=%s  วิ่งลู่=%s  ปะตัวตรวจจับ=%s")
+			:format(tostring(Hub.EggsGot), tostring(Hub.Riding), tostring(acPatched)))
+		return Hub.Phase
+	end
+	-- เปิดตารางตั้งค่าให้ปรับสดได้ ไม่ต้องรันสคริปต์ใหม่
+	--     getgenv().HMDCFG.MoveSpeed = 900
+	-- ใช้ตอนหาค่าที่เหมาะกับเครื่องแต่ละคน ปรับแล้วเห็นผลรอบถัดไปเลย
+	Hub.Cfg = Config
+
+	-- เปิดตัวนับผลงานให้อ่านได้ด้วย  เดิมอยู่ในตัวแปรท้องถิ่น มองจากข้างนอกไม่เห็น
+	--     Hub.Stats.stolen  ได้ไข่กี่ใบ
+	--     Hub.Stats.failed  พลาดกี่ใบ
+	-- ใช้ตอนวัดว่าปรับค่าแล้วดีขึ้นจริงไหม ไม่ใช่เดาเอาจากความรู้สึก
+	Hub.Stats = Stats
+
+	if type(getgenv) == "function" then
+		getgenv().HMD = Hub
+		getgenv().HMDSTATUS = Hub.status
+		getgenv().HMDCFG = Config
+	end
+	_G.HMD = Hub
+	_G.HMDSTATUS = Hub.status
+	_G.HMDCFG = Config
+end)
+
 --==================================================================
 -- ปิดป๊อปอัปที่บังจอ
 --
@@ -2612,8 +2798,8 @@ end
 -- ยิงเปล่าๆ ไม่ต้องส่งอะไร  ไม่มีของให้เก็บก็แค่คืนค่าไม่ใช่ true
 Hub.claimIndex = function()
 	if Config.AutoIndex == false then return false end
-	local net = ReplicatedStorage:FindFirstChild("Network")
-	local rf = net and net:FindFirstChild("Index: RequestClaimAll")
+	local net = Hub.NetRoot   -- รองรับโครงใหม่ด้วย (ดู Hub.pick)
+	local rf = Hub.remote("Index: RequestClaimAll")
 	if not rf or not rf:IsA("RemoteFunction") then return false end
 
 	local got = Hub.rq(function() return rf:InvokeServer() end)
@@ -2665,8 +2851,8 @@ end
 -- อ่านไข่หายากของรอบปัจจุบันจากเซิร์ฟ แล้วส่งถ้ายังไม่เคยส่งรอบนี้
 Hub.checkRare = function(force)
 	if tostring(Config.Webhook or "") == "" then return end
-	local net = ReplicatedStorage:FindFirstChild("Network")
-	local rf = net and net:FindFirstChild("Eggs: RequestAreaEggRareSpawnPresentations")
+	local net = Hub.NetRoot   -- รองรับโครงใหม่ด้วย (ดู Hub.pick)
+	local rf = Hub.remote("Eggs: RequestAreaEggRareSpawnPresentations")
 	if not rf or not rf:IsA("RemoteFunction") then return end
 
 	local okc, payload = Hub.rq(function() return rf:InvokeServer() end)
@@ -2744,8 +2930,8 @@ end
 -- เฝ้าสัญญาณที่เกมยิงมาเอง  ได้ทันทีไม่ต้องรอรอบถาม
 Hub.watchRare = function()
 	if Hub.RareHooked then return true end
-	local net = ReplicatedStorage:FindFirstChild("Network")
-	local ev = net and net:FindFirstChild("Eggs: AreaEggRareSpawnsRevealed")
+	local net = Hub.NetRoot   -- รองรับโครงใหม่ด้วย (ดู Hub.pick)
+	local ev = Hub.remote("Eggs: AreaEggRareSpawnsRevealed")
 	if not ev or not ev:IsA("RemoteEvent") then return false end
 	ev.OnClientEvent:Connect(function()
 		Hub.RareSeen = (Hub.RareSeen or 0) + 1
@@ -2967,8 +3153,8 @@ Hub.clearTreadmillState = function(force)
 	end
 	-- force = ข้ามคูลดาวน์  ใช้ตอนกำลังจะออกไปเก็บไข่ ต้องปลดให้ได้จริงๆ
 	if not force and os.clock() - lastFixAt < 1.5 then return false end
-	local net = ReplicatedStorage:FindFirstChild("Network")
-	local rf = net and net:FindFirstChild(TREAD_UNEQUIP)
+	local net = Hub.NetRoot   -- รองรับโครงใหม่ด้วย (ดู Hub.pick)
+	local rf = Hub.remote(TREAD_UNEQUIP)
 	if not rf or not rf:IsA("RemoteFunction") then
 		Hub.TreadNoRemote = (Hub.TreadNoRemote or 0) + 1
 		return false
@@ -3800,7 +3986,7 @@ end
 -- อ่านสถานะระบบกันโกงตรงๆ  เลิกเดา
 --
 -- เกมมี BindableFunction ในเครื่องตัวหนึ่งที่คืนสถานะทั้งหมดของระบบกันโกง
---     require(ReplicatedStorage.Library.Signal)
+--     require(Hub.pick("Packages.Signal", "Library.Signal"))
 --     Signal.Invoke(Signal.MAP.Client.ClientCharacter.GET_DEBUG_SNAPSHOT)
 -- ยืนยันสดแล้วว่าเรียกได้จริง คืนมา 64 ฟิลด์  ชื่อจริงคือ "ClientCharacter: GetDebugSnapshot"
 --
@@ -3825,7 +4011,7 @@ end
 Hub.acSnapshot = function()
 	if type(Hub.SignalMod) ~= "table" then
 		local ok, mod = pcall(function()
-			return require(ReplicatedStorage.Library.Signal)
+			return require(Hub.pick("Packages.Signal", "Library.Signal"))
 		end)
 		if not ok or type(mod) ~= "table" then
 			Hub.SnapSkipped = "require Signal ไม่ได้"
@@ -3962,8 +4148,8 @@ end
 --     { IsCarrying, Uid, AreaId, AssetCategory, RunBackWakeDelayRequired, SpeedMultiplier }
 Hub.watchCarry = function()
 	if Hub.CarryHooked then return true end
-	local net = ReplicatedStorage:FindFirstChild("Network")
-	local ev = net and net:FindFirstChild("Eggs: AreaEggCarryState")
+	local net = Hub.NetRoot   -- รองรับโครงใหม่ด้วย (ดู Hub.pick)
+	local ev = Hub.remote("Eggs: AreaEggCarryState")
 	if not ev or not ev:IsA("RemoteEvent") then return false end
 	ev.OnClientEvent:Connect(function(st)
 		if type(st) == "table" then
@@ -4162,7 +4348,13 @@ Hub.glide = function(hrp, hum, dest)
 		-- (เครื่องเดียวกันนั้น noclip = true ด้วย ซึ่งล้มทฤษฎี noclip ไปพร้อมกัน)
 		--
 		-- คืนกลับเป็นเลขตายตัวตามเดิม อย่าไปทำให้ไอดีที่ปกติดีอยู่แล้วช้าลงฟรีๆ
-		speed = math.clamp(tonumber(Config.MoveSpeed) or 700, 60, 900)
+		-- เพดานเดิมคือ 900 ซึ่งตั้งไว้ตอนที่ยังกระโดดข้ามช่วงชะลอได้
+		-- ตอนนี้ช่วงท้ายถูกแยกออกจากความเร็วเดินทางแล้ว (ดูคอมเมนต์ที่ stepDist)
+		-- ความเร็วเดินทางจึงไม่กระทบการเก็บไข่อีกต่อไป ยกเพดานได้
+		--
+		-- ยกไปที่ 2000  ซึ่งยังต่ำกว่า MaxHorizontalSpeed 5000 ที่เรายัดไว้เอง
+		-- เกินกว่านั้นไม่ใช่เรื่องกฎแล้ว แต่เป็นเรื่องเซิร์ฟตามตำแหน่งไม่ทัน
+		speed = math.clamp(tonumber(Config.MoveSpeed) or 700, 60, 2000)
 
 		-- แต่ต้องปะตัวตรวจจับติดด้วย ไม่งั้นห้ามวิ่งเร็ว
 		--
@@ -4409,6 +4601,67 @@ Hub.glide = function(hrp, hum, dest)
 
 		local capPerFrame = useSpeed * math.min(dt, 0.05)
 		local stepDist = math.min(capPerFrame, m)
+
+		-- ห้ามกระโดดข้ามช่วงชะลอในเฟรมเดียว
+		--
+		-- นี่คือตัวที่ทำให้เร่งความเร็วไม่ได้มาตลอด
+		--
+		-- ระยะที่เดินได้ต่อเฟรม = ความเร็ว x 0.05  ที่ 700 คือ 35 studs
+		-- แต่ระยะชะลอ (ApproachDist) มีแค่ 10 studs
+		-- พอเหลือระยะ 12 studs เฟรมถัดไปจะเดินเต็ม 12 ไปถึงไข่เลย
+		-- = ไม่มีเฟรมไหนได้วิ่งด้วยความเร็วที่ถูกกฎเลยสักเฟรม
+		--
+		-- เซิร์ฟดูตัวอย่างการเคลื่อนที่ล่าสุดก่อนอนุมัติคำสั่งเก็บ (ดูคอมเมนต์ข้างบน)
+		-- ไม่มีตัวอย่างสะอาดให้ดู = ตอบ "Movement is not currently trusted"
+		-- ยิ่งตั้งความเร็วสูง ระยะต่อเฟรมยิ่งยาว ยิ่งข้ามบ่อย ยิ่งเก็บไม่ติด
+		--
+		-- แก้โดยให้หยุดพอดีที่ขอบเขตชะลอ ไม่เลยเข้าไป
+		-- เฟรมถัดไปถึงจะเข้าโหมดชะลอแล้วค่อยๆ เข้าไปหาไข่
+		-- ได้ตัวอย่างถูกกฎครบทุกครั้ง ไม่ว่าจะตั้งความเร็วเท่าไหร่
+		--
+		-- ผลพลอยได้: ปลดล็อกให้เร่งความเร็วได้จริง
+		-- เพราะช่วงท้ายถูกแยกออกจากความเร็วเดินทางแล้ว
+		-- ต้องมีก้าวขั้นต่ำด้วย ไม่งั้นคืบทีละเศษจนหมดเวลา
+		--
+		-- ครั้งแรกเขียนแค่ stepDist = m - appDist ซึ่งพังทันที
+		-- พอระยะเหลือ 10.0001 กับระยะชะลอ 10 มันสั่งเดิน 0.0001 studs
+		-- เฟรมถัดไประยะยังเกินอยู่ ก็สั่งเดินเศษเล็กลงไปอีก วนแบบนี้ไม่จบ
+		-- ไม่มีวันเข้าเขตชะลอ สุดท้ายหมดเวลาเดินทาง (วัดได้ 9 ครั้งใน 193 วินาที)
+		if appDist > 0 and m > appDist then
+			local toEdge = m - appDist
+			if stepDist > toEdge then
+				stepDist = math.max(toEdge, 0.5)
+				Hub.ApproachKept = (Hub.ApproachKept or 0) + 1
+			end
+		end
+
+		-- [เคยลองวาปกระโดดทีละช่วงแล้ว ไม่ผ่าน อย่าทำอีก]
+		--
+		-- ไอเดียคือช่วงเดินทางไกลกระโดดทีละ 600 studs ไปหยุดที่ขอบเขตชะลอ
+		-- แล้วเดินถูกกฎ 10 studs สุดท้ายเหมือนเดิม  เร็วขึ้นมากจริง
+		-- ตั้งอยู่บนสมมติฐานว่า "เซิร์ฟดูแค่ช่วงท้ายก่อนขอหยิบ"
+		--
+		-- วัดจริง A/B ข้างละ 100 วินาที ที่ MoveSpeed 700 เท่ากัน:
+		--     ปิด      ได้ 1 · พลาด 0 · ปฏิเสธ 0 · กระโดด 0
+		--     เปิด 600 ได้ 0 · พลาด 2 · ปฏิเสธ 9 · กระโดด 448
+		--   คะแนนอันตรายของระบบกันโกง = 0.00 ทั้งสองข้าง
+		--
+		-- อ่านผลได้สองข้อ:
+		--   1. ระบบกันโกงฝั่งไคลเอนต์ไม่ได้จับเลย การกระโดดผ่านฉลุย
+		--      (เพราะ adoptBaseline ย้ายจุดอ้างอิงตามทุกครั้ง)
+		--   2. แต่เซิร์ฟปฏิเสธคำสั่งหยิบ 9 ครั้ง เก็บไม่ได้เลยสักใบ
+		--
+		-- แปลว่าสมมติฐานผิด เซิร์ฟไม่ได้ดูแค่ช่วงท้าย
+		-- มันดูประวัติการเคลื่อนที่ย้อนหลังไกลกว่า 10 studs / 0.32 วินาที
+		-- เดินถูกกฎแค่ช่วงท้ายจึงไม่พอลบล้างการกระโดดก่อนหน้า
+		--
+		-- และตายเพิ่มด้วย เพราะกระโดดทีละ 600 คือข้ามการตรวจกับดักทั้งเส้นทาง
+		-- (ตัวหลบกับดักตรวจแค่จุดที่จะไปถึง ไม่ได้ตรวจทางที่ผ่าน)
+		-- อันนี้แก้ได้ด้วยการเช็คพื้นกับกับดักตลอดเส้น แต่แก้ไปก็ไม่ช่วย
+		-- เพราะตัวที่ทำให้เก็บไม่ได้คือข้อ 2 ไม่ใช่การตาย
+		--
+		-- สรุป: ความเร็วเดินทางแลกมาด้วยการเก็บไม่ได้เลย ไม่คุ้มในทุกกรณี
+
 		local nextPos = hrp.Position + dir * stepDist
 
 		-- หลบกับดักที่ขวางอยู่ (ดู Hub.trapList)
@@ -4416,7 +4669,9 @@ Hub.glide = function(hrp, hum, dest)
 		-- เบี่ยงออกด้านข้างเท่าที่พอพ้นรัศมี แล้ววิ่งต่อไปเป้าเดิม
 		-- ไม่ได้หยุด ไม่ได้เปลี่ยนเป้า จึงไม่เสียเวลาและไม่กระทบลำดับการเก็บไข่
 		if Config.DodgeTraps ~= false then
-			local t = Hub.trapAt(nextPos)
+			-- รวมการ์ดที่เฝ้าไข่เข้ามาด้วย (ดู Hub.guardAt)
+			-- ส่ง dest ไปด้วยเพื่อยกเว้นการ์ดที่ยืนคร่อมไข่ที่เราจะไปเก็บ
+			local t = Hub.hazardAt(nextPos, dest)
 			if t then
 				-- เวกเตอร์ตั้งฉากกับทิศที่วิ่ง เลือกข้างที่ออกห่างกับดักมากกว่า
 				local side = Vector3.new(-dir.Z, 0, dir.X)
@@ -4425,8 +4680,8 @@ Hub.glide = function(hrp, hum, dest)
 				local push = t.r + 2
 				local try = nextPos + side * push
 				-- เบี่ยงแล้วยังชนอีกก็เบี่ยงอีกฝั่ง
-				if Hub.trapAt(try) then try = nextPos - side * push end
-				if not Hub.trapAt(try) then
+				if Hub.hazardAt(try, dest) then try = nextPos - side * push end
+				if not Hub.hazardAt(try, dest) then
 					nextPos = try
 					Hub.TrapDodged = (Hub.TrapDodged or 0) + 1
 				end
@@ -5286,7 +5541,7 @@ end
 -- ซื้อ Trail ที่เร่งความเร็วได้มากที่สุดเท่าที่เงินถึง
 --
 -- อ่านข้อมูลจากเกมเอง ไม่ฝังราคาไว้ในโค้ด  เกมปรับราคาเมื่อไหร่เราตามเอง
---     require(ReplicatedStorage.Directory.Trails).Directory
+--     require(Hub.pick("Data.Trails", "Directory.Trails")).Directory
 --     -> { GreyTrail={Price=100, SpeedMultiplier=1.5}, ... }
 -- ทั้ง 10 ระดับที่อ่านได้จากเกมสด:
 --     Divine x14 300T · Eternal x10 12.5T · Secret x7 500B · Galaxy x5 20B
@@ -5319,11 +5574,11 @@ Hub.upgradeTreadmill = function(force)
 	if not force and os.clock() - (Hub.TmAt or -1e9) < 60 then return false end
 	Hub.TmAt = os.clock()
 
-	local okT, T = pcall(function() return require(ReplicatedStorage.Directory.Treadmills) end)
+	local okT, T = pcall(function() return require(Hub.pick("Data.Treadmills", "Directory.Treadmills")) end)
 	if not okT or type(T) ~= "table" or type(T.GetByUpgradeLevel) ~= "function" then return false end
-	local okS, Save = pcall(function() return require(ReplicatedStorage.Library.Client.Save) end)
+	local okS, Save = pcall(function() return require(Hub.pick("Shared.Save", "Library.Client.Save")) end)
 	if not okS then return false end
-	local rf = ReplicatedStorage.Network:FindFirstChild("Treadmills: RequestUpgrade")
+	local rf = Hub.remote("Treadmills: RequestUpgrade")
 	if not rf or not rf:IsA("RemoteFunction") then return false end
 
 	-- อัปทีละครั้งต่อรอบเท่านั้น  ห้ามวนยิงรัว
@@ -5381,9 +5636,9 @@ Hub.buyBestTrail = function(force)
 	if not force and os.clock() - (Hub.TrailAt or -1e9) < 60 then return false end
 	Hub.TrailAt = os.clock()
 
-	local okD, D = pcall(function() return require(ReplicatedStorage.Directory.Trails).Directory end)
+	local okD, D = pcall(function() return require(Hub.pick("Data.Trails", "Directory.Trails")).Directory end)
 	if not okD or type(D) ~= "table" then return false end
-	local okS, Save = pcall(function() return require(ReplicatedStorage.Library.Client.Save) end)
+	local okS, Save = pcall(function() return require(Hub.pick("Shared.Save", "Library.Client.Save")) end)
 	if not okS then return false end
 	local okG, data = pcall(function() return Save.Get(LocalPlayer) end)
 	if not okG or type(data) ~= "table" then return false end
@@ -5418,7 +5673,7 @@ Hub.buyBestTrail = function(force)
 	end
 
 	if best then
-		local rf = ReplicatedStorage.Network:FindFirstChild("Trails: RequestPurchase")
+		local rf = Hub.remote("Trails: RequestPurchase")
 		if rf and rf:IsA("RemoteFunction") then
 			-- ผ่าน callTimed เช่นกัน กันเธรดค้างถ้าเซิร์ฟไม่ตอบ
 			local res = Hub.callTimed(function(a) return rf:InvokeServer(a) end, best, 5)
@@ -5437,7 +5692,7 @@ Hub.buyBestTrail = function(force)
 
 	-- ใส่ตัวที่ดีที่สุดที่มีเสมอ  ซื้อแล้วไม่ใส่ก็ไม่ได้ speed
 	if ownedBest and Hub.TrailWorn ~= ownedBest then
-		local sel = ReplicatedStorage.Network:FindFirstChild("Trails: RequestSelect")
+		local sel = Hub.remote("Trails: RequestSelect")
 		if sel and sel:IsA("RemoteFunction") then
 			local ok = Hub.callTimed(function(a) return sel:InvokeServer(a) end, ownedBest, 5)
 			if ok ~= false then
@@ -5511,6 +5766,84 @@ Hub.trapAt = function(pos)
 	return nil
 end
 
+--==================================================================
+-- หลบการ์ดที่เฝ้าไข่
+--
+-- อาการที่ผู้ใช้เจอ: "ตอนสัตว์ที่เคยเฝ้าไข่มันกลับมา แล้วเราวาปไปชนมัน ไข่เราตก"
+--
+-- การ์ดอยู่ที่ workspace.__OBJECTS.Areas.GuardAreas.<โซน>.Guard
+-- ในโมเดลมีส่วนชื่อ Collider ซึ่ง CanCollide กับ CanTouch เป็น true ทั้งคู่
+-- นั่นคือตัวที่เราไปชนแล้วไข่หล่น
+--
+-- ขนาดต่างกันมากตามโซน จึงคิดรัศมีจากขนาดจริงของแต่ละตัว ไม่ใช้เลขตายตัว
+--   Lake        2.5 x 3.9    -> รัศมี ~2.0 + ระยะเผื่อ
+--   Cosmic      8.2 x 6.9    -> รัศมี ~4.1 + ระยะเผื่อ
+--   Prehistoric 9.2 x 12.3   -> รัศมี ~6.1 + ระยะเผื่อ
+--
+-- ต่างจากกับดักตรงที่การ์ด "เดินได้" จึงอ่านตำแหน่งสดทุกครั้งที่ถาม
+-- แคชไว้แค่รายชื่อส่วน Collider (ซึ่งไม่เปลี่ยน) ไม่ได้แคชตำแหน่ง
+--==================================================================
+Hub.guardParts = function()
+	if os.clock() - (Hub.GuardScanAt or -1e9) < 5 then return Hub.GuardCols or {} end
+	Hub.GuardScanAt = os.clock()
+
+	local out = {}
+	local function add(root)
+		if not root then return end
+		for _, g in ipairs(root:GetDescendants()) do
+			if g:IsA("Model") and g.Name == "Guard" then
+				local col = g:FindFirstChild("Collider")
+				if col and col:IsA("BasePart") then out[#out + 1] = col end
+			end
+		end
+	end
+
+	local obj = workspace:FindFirstChild("__OBJECTS")
+	local areas = obj and obj:FindFirstChild("Areas")
+	add(areas and areas:FindFirstChild("GuardAreas"))
+	add(workspace:FindFirstChild("_Guards"))   -- เผื่อเกมย้ายมาสร้างที่นี่ตอนออกล่า
+
+	Hub.GuardCols = out
+	Hub.GuardCount = #out
+	return out
+end
+
+-- ตำแหน่งนี้ชนการ์ดไหม
+--
+-- dest คือที่หมายของเรา  ส่งมาด้วยเพื่อยกเว้นการ์ดที่ยืนคร่อมเป้าหมายอยู่
+-- ถ้าไม่ยกเว้น ไข่ที่วางใกล้การ์ดจะกลายเป็นไข่ที่เราเข้าไปเก็บไม่ได้เลย
+-- ตัวหลบจะดันเราออกทุกเฟรมจนหมดเวลาเดินทาง แล้วนับเป็นเที่ยวที่เสียเปล่า
+Hub.guardAt = function(pos, dest)
+	if Config.DodgeGuards == false then return nil end
+	local extra = tonumber(Config.GuardMargin) or 8
+
+	for _, c in ipairs(Hub.guardParts()) do
+		if c.Parent then
+			local p = c.Position
+			local r = math.max(c.Size.X, c.Size.Z) * 0.5 + extra
+			local dx, dz = pos.X - p.X, pos.Z - p.Z
+			if (dx * dx + dz * dz) < (r * r) then
+				-- การ์ดตัวนี้ทับที่หมายอยู่ = ต้องเข้าไป ไม่หลบ
+				local skip = false
+				if typeof(dest) == "Vector3" then
+					local ex, ez = dest.X - p.X, dest.Z - p.Z
+					if (ex * ex + ez * ez) < (r * r) then skip = true end
+				end
+				if not skip then
+					Hub.GuardDodged = (Hub.GuardDodged or 0) + 1
+					return { p = p, r = r }
+				end
+			end
+		end
+	end
+	return nil
+end
+
+-- ตำแหน่งนี้อันตรายไหม  รวมทั้งกับดักและการ์ดไว้ที่เดียว
+Hub.hazardAt = function(pos, dest)
+	return Hub.trapAt(pos) or Hub.guardAt(pos, dest)
+end
+
 Hub.resetWindow = function()
 	if not (Hub.BoxUp or isResetting()) then return false end
 	local left = Hub.nightIn() or secondsToReset()
@@ -5518,10 +5851,65 @@ Hub.resetWindow = function()
 	return left == nil or left <= 45
 end
 
+-- หาป้ายนับเวลาถอยหลังของเกม  รองรับทั้งที่เก่าและที่ใหม่
+--
+-- 26/8/2569 เกมย้ายตัวนับ:
+--     เดิม  GameResetTimer.TimeLeft.Main.TextLabel
+--     ใหม่  HUD.GameHUD.BottomRight.NightTimer.Value      ("in 2m 10s")
+--           HUD.TradmilHud.BottomRight.NightTimer.Value   (ตอนอยู่บนลู่วิ่ง)
+--
+-- อาการตอนหาไม่เจอคือหนักมาก ไม่ใช่แค่ฟีเจอร์หาย:
+-- Hub.resetWindow เขียนไว้ว่า "อ่านเวลาไม่ได้ = ยอมเชื่อธง"
+-- พออ่านไม่ได้เลยกลายเป็นเชื่อว่าใกล้รีเซ็ตตลอดเวลา
+-- สคริปต์เลยยืนแช่ที่จุดกลางทั้งรอบ ไม่ออกไปเก็บไข่สักใบ
+-- (ผู้ใช้เห็น "ใกล้รีเซ็ต - ยืนรอที่จุดกลาง" ทั้งที่เหลือตั้ง 3 นาที)
+--
+-- ชั้นสุดท้ายไล่หาจากรูปแบบข้อความ เกมย้ายอีกกี่รอบก็ยังหาเจอเอง
+Hub.TimerPaths = {
+	"HUD.GameHUD.BottomRight.NightTimer.Value",
+	"HUD.TradmilHud.BottomRight.NightTimer.Value",
+	"GameResetTimer.TimeLeft.Main.TextLabel",
+}
+
+Hub.findTimer = function()
+	local pg = LocalPlayer:FindFirstChild("PlayerGui")
+	if not pg then return nil end
+
+	-- ใช้ตัวที่เจอรอบก่อนถ้ายังอยู่  ไม่ต้องไล่ทั้ง GUI ทุกครั้งที่ถาม
+	local c = Hub.TimerLbl
+	if c and c.Parent and c.Text and c.Text ~= "" then return c end
+
+	for _, path in ipairs(Hub.TimerPaths) do
+		local node = pg
+		for seg in path:gmatch("[^%.]+") do
+			node = node and node:FindFirstChild(seg)
+		end
+		if node and node:IsA("TextLabel") and node.Text ~= "" then
+			Hub.TimerLbl = node
+			Hub.TimerFrom = path
+			return node
+		end
+	end
+
+	-- ไม่เจอตามเส้นทางที่รู้จัก ไล่หาจากข้อความแทน
+	for _, d in ipairs(pg:GetDescendants()) do
+		if d:IsA("TextLabel") and d.Visible then
+			local t = d.Text or ""
+			if t:match("^in%s+%d+m%s+%d+s") or t:match("^in%s+%d+s%s*$") then
+				Hub.TimerLbl = d
+				Hub.TimerFrom = "หาจากข้อความ: " .. d:GetFullName()
+				return d
+			end
+		end
+	end
+
+	Hub.TimerFrom = "หาไม่เจอ"
+	return nil
+end
+
 function secondsToReset()
-	local frame = findGui("TimeLeft")
-	local lbl = frame and frame:FindFirstChild("TextLabel", true)
-	if not lbl or not lbl.Visible then return nil end
+	local lbl = Hub.findTimer()
+	if not lbl then return nil end
 
 	local txt = lbl.Text
 	local m = tonumber(txt:match("(%d+)%s*m")) or 0
@@ -7078,8 +7466,8 @@ Hub.rideTreadmill = function()
 	task.wait(0.4)   -- ให้ตัวลงพื้นก่อน เรย์ถึงจะโดน
 
 	-- ยิงสั่งขึ้น  ลองซ้ำได้ตามคูลดาวน์ของเกมเอง
-	local net = ReplicatedStorage:FindFirstChild("Network")
-	local rf = net and net:FindFirstChild(Hub.TREAD_EQUIP)
+	local net = Hub.NetRoot   -- รองรับโครงใหม่ด้วย (ดู Hub.pick)
+	local rf = Hub.remote(Hub.TREAD_EQUIP)
 
 	-- ติดสถานะเก่าค้างอยู่ต้องล้างก่อน ไม่งั้นขึ้นใหม่ไม่ได้
 	--
@@ -7094,7 +7482,7 @@ Hub.rideTreadmill = function()
 	-- เพราะการ์ดตัวนั้นกันไม่ให้ปลดตอน Hub.Riding ซึ่งตอนนี้เป็นจริงอยู่
 	-- แต่นี่คือการล้างของเก่าเพื่อจะขึ้นใหม่ ไม่ใช่การเลิกวิ่ง
 	if Hub.TreadmillActive == true then
-		local uq = net and net:FindFirstChild(TREAD_UNEQUIP)
+		local uq = Hub.remote(TREAD_UNEQUIP)
 		if uq and uq:IsA("RemoteFunction") then
 			Hub.rq(function() return uq:InvokeServer() end)
 			Hub.RidePreClear = (Hub.RidePreClear or 0) + 1
@@ -7168,7 +7556,7 @@ Hub.rideTreadmill = function()
 			end
 
 			-- ปฏิเสธเพราะยังติดของเก่าค้าง ล้างแล้วลองใหม่รอบหน้า
-			local uq = net and net:FindFirstChild(TREAD_UNEQUIP)
+			local uq = Hub.remote(TREAD_UNEQUIP)
 			if uq and uq:IsA("RemoteFunction") then
 				Hub.rq(function() return uq:InvokeServer() end)
 			end
