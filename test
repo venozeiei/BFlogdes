@@ -702,6 +702,18 @@ local Config = {
 	-- ใช้เมื่อเซิร์ฟไม่ได้ส่ง SpeedMultiplier มาเอง
 	CarrySpeedMul = 0.5,
 
+	-- โดนล้มระหว่างเดินทางแล้วรอให้ลุกก่อน อย่าเขียนพิกัดสู้ฟิสิกส์
+	--
+	-- true  = รอเท่าที่เกมบอก แล้วเดินทางต่อ (ต่อเวลาให้ด้วย ไม่นับเป็นล้มเหลว)
+	-- false = เขียนพิกัดต่อทั้งที่ล้มอยู่ = กระตุกไปมาอยู่กับที่จนหมดเวลา
+	WaitRagdoll = true,
+
+	-- ข้ามช่องที่เก็บไปแล้วในรอบนี้ (ดู Hub.claimedSlots)
+	--
+	-- เกมให้เก็บช่องละครั้งต่อรอบรีเซ็ต ไปซ้ำก็โดนปฏิเสธอย่างเดียว
+	-- เสียเที่ยวไปกลับราว 3,400 studs ฟรีๆ ทุกครั้ง
+	SkipClaimed = true,
+
 	-- หลบกับดักที่คนอื่นวางไว้ระหว่างเดินทาง (ดู Hub.trapList)
 	DodgeTraps = true,
 
@@ -711,7 +723,12 @@ local Config = {
 	-- ตัวนี้เบี่ยงออกข้างเท่าที่พอพ้นตัวมัน ไม่ได้หยุด ไม่ได้เปลี่ยนเป้า
 	--
 	-- การ์ดที่ยืนคร่อมไข่ที่เราจะไปเก็บ จะไม่ถูกหลบ ไม่งั้นเข้าไปเก็บไม่ได้เลย
-	DodgeGuards = true,
+	--
+	-- [ปิดไว้ก่อน ยังไม่ผ่านการเทส]
+	-- เปิดครั้งแรกแล้วเจออาการวาปไปมาไม่หยุด เพราะเลือกข้างเบี่ยงใหม่ทุกเฟรม
+	-- แก้ตัวเลือกข้างให้จำได้แล้ว (ดู Hub.DodgeSide) แต่ยังไม่ได้พิสูจน์ว่าหาย
+	-- ปิดไว้จนกว่าจะเทสกับการ์ดที่เดินจริงแล้วเห็นว่าไม่สั่น
+	DodgeGuards = false,
 
 	-- เบี่ยงห่างจากขอบตัวการ์ดกี่ studs
 	-- น้อยไปเฉี่ยวโดน  มากไปอ้อมไกลเสียเวลา
@@ -4430,6 +4447,35 @@ Hub.glide = function(hrp, hum, dest)
 			continue
 		end
 
+		-- ติดสถานะล้มอยู่ ห้ามเขียนพิกัดเด็ดขาด
+		--
+		-- อาการที่ผู้ใช้เห็น: "วาปไปแล้วมันซะงักกลับไปมา"
+		--
+		-- โดนกับดักหรือโดนตีระหว่างทาง เซิร์ฟจะตั้ง RagdollEndTime แล้วเข้าโหมดล้ม
+		-- ระหว่างนั้นฟิสิกส์ของเกมคุมตัวละครอยู่ และมันเขียนทีหลังเราในเฟรมเดียวกัน
+		-- เราเขียนไป 700 studs/s มันดึงกลับ วนสู้กันทุกเฟรม = กระตุกไปมาอยู่กับที่
+		--
+		-- ของเดิมเช็คค่านี้แค่ตอนไปถึงไข่แล้ว (บรรทัดราว 8460) ไม่มีในลูปเดินทางเลย
+		-- โดนล้มกลางทางจึงสู้กับฟิสิกส์ไปเรื่อยจนหมดเวลาเดินทาง
+		--
+		-- เกมบอกเวลาที่จะหลุดมาให้ตรงๆ รอเท่าที่จำเป็นพอดี ไม่ต้องเดา
+		-- และต่อเวลาเดินทางให้เท่าที่รอ ไม่งั้นจะถูกนับเป็นเดินทางล้มเหลวทั้งที่แค่รอ
+		if Config.WaitRagdoll ~= false then
+			local left = Hub.trappedFor and Hub.trappedFor() or 0
+			if left > 0 then
+				Hub.RagdollWaits = (Hub.RagdollWaits or 0) + 1
+				Hub.Phase = ("ล้มอยู่ - รอลุก %.1f วิ"):format(left)
+				local w0 = os.clock()
+				while (Hub.trappedFor and Hub.trappedFor() or 0) > 0 do
+					if not Config.Running or not alive() then return false end
+					if os.clock() - w0 > 10 then break end   -- ค่าเพี้ยน อย่ารอทั้งวัน
+					task.wait(0.1)
+				end
+				deadline = deadline + (os.clock() - w0)
+				continue
+			end
+		end
+
 		if boosted then Hub.armImpulse(hrp) end   -- ต่ออายุทุกเฟรม ไม่งั้นหมดอายุแล้วโดนจับ
 
 		-- วาล์วนิรภัย: ถอยก่อนโดน แทนที่จะรู้ตอนตายไปแล้ว
@@ -4676,7 +4722,23 @@ Hub.glide = function(hrp, hum, dest)
 				-- เวกเตอร์ตั้งฉากกับทิศที่วิ่ง เลือกข้างที่ออกห่างกับดักมากกว่า
 				local side = Vector3.new(-dir.Z, 0, dir.X)
 				local away = Vector3.new(nextPos.X - t.p.X, 0, nextPos.Z - t.p.Z)
-				if side:Dot(away) < 0 then side = -side end
+
+				-- เลือกข้างแล้วต้องจำไว้ ห้ามคิดใหม่ทุกเฟรม
+				--
+				-- ถ้าสิ่งกีดขวางอยู่ตรงหน้าพอดี ค่า dot จะเฉียดศูนย์
+				-- เศษทศนิยมนิดเดียวก็พลิกข้างได้ กลายเป็นเบี่ยงซ้ายขวาสลับทุกเฟรม
+				-- กับดักรัศมีเล็ก (6-10) แค่สั่นเบาๆ มองไม่ค่อยออก
+				-- แต่การ์ดรัศมี 12-16 กลายเป็นวาปไปมาเห็นชัด แล้วไปไม่ถึงที่หมาย
+				--
+				-- จำไว้ว่ากำลังหลบตัวไหนอยู่และเลือกข้างไหนไป
+				-- ตราบใดที่ยังหลบตัวเดิม ใช้ข้างเดิมตลอด อ้อมไปทางเดียวจนพ้น
+				if t.id ~= nil and Hub.DodgeFor == t.id and Hub.DodgeSide then
+					side = side * Hub.DodgeSide
+				else
+					local pick = (side:Dot(away) < 0) and -1 or 1
+					side = side * pick
+					Hub.DodgeFor, Hub.DodgeSide = t.id, pick
+				end
 				local push = t.r + 2
 				local try = nextPos + side * push
 				-- เบี่ยงแล้วยังชนอีกก็เบี่ยงอีกฝั่ง
@@ -5748,7 +5810,8 @@ Hub.trapList = function()
 			if d:IsA("BasePart") and d.CanTouch and d.Name:lower():find("trap") then
 				-- รัศมีอันตราย = ครึ่งความกว้างที่ใหญ่สุด บวกตัวละครอีกนิด
 				local r = math.max(d.Size.X, d.Size.Z) * 0.5 + 4
-				out[#out + 1] = { p = d.Position, r = r }
+				-- id ไว้ให้ตัวเบี่ยงจำได้ว่ากำลังหลบอันไหนอยู่ (ดู Hub.dodgeSide)
+				out[#out + 1] = { p = d.Position, r = r, id = d }
 			end
 		end
 	end
@@ -5831,7 +5894,7 @@ Hub.guardAt = function(pos, dest)
 				end
 				if not skip then
 					Hub.GuardDodged = (Hub.GuardDodged or 0) + 1
-					return { p = p, r = r }
+					return { p = p, r = r, id = c }
 				end
 			end
 		end
@@ -6153,7 +6216,54 @@ local function eggRate(rec)
 end
 
 -- ไข่ที่ว่างอยู่ เรียงจาก $/s มากไปน้อย  (area == "ALL" = ทุกด่าน)
+--==================================================================
+-- ช่องที่เราเก็บไปแล้วในรอบนี้
+--
+-- อาการที่เจอ: "จู่ๆ ก็ดึงไข่ไม่ติด"
+-- เซิร์ฟตอบเหตุผลมาตรงๆ ว่า "Area egg already claimed this reset"
+-- (วัดสด: โดนปฏิเสธ 11 ครั้ง เป็นข้อความนี้ 6 ครั้ง)
+--
+-- ไม่ใช่คนอื่นชิงไปก่อน แต่เป็นเราเองวนกลับไปเก็บช่องที่เก็บไปแล้ว
+-- เกมจำกัดหนึ่งช่องต่อหนึ่งคนต่อหนึ่งรอบรีเซ็ต
+--
+-- เซิร์ฟเก็บรายการไว้ในเซฟของเราเอง อ่านได้ตรงๆ ไม่ต้องเดา:
+--     Save.Get(เรา).CurrentAreaEggClaims = {
+--         PeriodIndex = 5959464,
+--         Slots = { ["Snow:Slot_001"] = true, ["Cosmic:Slot_003"] = true },
+--     }
+-- คีย์คือ AreaId .. ":" .. NestId ซึ่งมีอยู่ในข้อมูลไข่ทุกใบอยู่แล้ว
+--
+-- PeriodIndex ต้องตรวจด้วย พอขึ้นรอบใหม่เลขจะเปลี่ยน รายการเก่าใช้ไม่ได้แล้ว
+-- ถ้าไม่เช็คจะกลายเป็นเมินไข่ที่เก็บได้จริงไปทั้งรอบ
+--==================================================================
+Hub.claimedSlots = function()
+	-- อ่านเซฟไม่ได้ถือว่าไม่มีอะไรถูกเก็บ  ปล่อยให้เซิร์ฟเป็นคนปฏิเสธเอง
+	-- ดีกว่าเดาว่าเก็บแล้วทั้งที่ยังไม่ได้เก็บ ซึ่งจะทำให้ข้ามไข่ดีทิ้งฟรี
+	if os.clock() - (Hub.ClaimAt or -1e9) < 2 then return Hub.ClaimSet or {} end
+	Hub.ClaimAt = os.clock()
+
+	local out = {}
+	pcall(function()
+		if not Save then return end
+		local data = select(2, pcall(Save.Get, LocalPlayer, false))
+		if type(data) ~= "table" then return end
+		local c = data.CurrentAreaEggClaims
+		if type(c) ~= "table" or type(c.Slots) ~= "table" then return end
+		Hub.ClaimPeriod = c.PeriodIndex
+		for k, v in pairs(c.Slots) do
+			if v then out[tostring(k)] = true end
+		end
+	end)
+
+	Hub.ClaimSet = out
+	local n = 0
+	for _ in pairs(out) do n = n + 1 end
+	Hub.ClaimCount = n
+	return out
+end
+
 local function rankedEggs(area)
+	local claimed = (Config.SkipClaimed ~= false) and Hub.claimedSlots() or {}
 	local list = {}
 	for _, r in pairs(snapshot()) do
 		-- รับทั้ง Slot และ Dropped
@@ -6171,7 +6281,15 @@ local function rankedEggs(area)
 		-- กฎเก็บใบแพงสุดก่อนจึงไม่เปลี่ยน ใบที่หล่นแค่เข้าคิวตามราคาจริงของมัน
 		local st = r.State
 		if (st == "Slot" or st == "Dropped") and (area == "ALL" or r.AreaId == area) then
-			list[#list + 1] = { rec = r, rate = eggRate(r) }
+			-- ช่องที่เราเก็บไปแล้วรอบนี้ ไปกี่ครั้งก็โดนปฏิเสธ อย่าเสียเที่ยว
+			-- (ดู Hub.claimedSlots)  ไข่ที่หล่นไม่นับ เพราะมันหลุดจากช่องมาแล้ว
+			local key = (st == "Slot" and r.AreaId and r.NestId)
+				and (tostring(r.AreaId) .. ":" .. tostring(r.NestId)) or nil
+			if key and claimed[key] then
+				Hub.SkipClaimed = (Hub.SkipClaimed or 0) + 1
+			else
+				list[#list + 1] = { rec = r, rate = eggRate(r) }
+			end
 		end
 	end
 	table.sort(list, function(a, b) return a.rate > b.rate end)
@@ -8575,8 +8693,31 @@ local function warpCycle()
 				Hub.BoxAborts = (Hub.BoxAborts or 0) + 1
 				break
 
-			elseif tostring(msg):find("unavailable") or tostring(msg):find("Unavailable") then
-				-- "Egg unavailable" = ไปถึงแล้วไข่ไม่อยู่แล้ว คนอื่นเก็บไปก่อน
+			elseif tostring(msg):find("unavailable") or tostring(msg):find("Unavailable")
+				or tostring(msg):find("already claimed") then
+				-- ไปถึงแล้วแต่เก็บใบนี้ไม่ได้แน่นอนแล้ว มีสองแบบ
+				--
+				-- "Egg unavailable"                     คนอื่นเก็บไปก่อน
+				-- "Area egg already claimed this reset" เราเองเก็บช่องนี้ไปแล้วรอบนี้
+				--
+				-- แบบหลังเพิ่งเข้ามาใหม่หลังเกมอัปเดต และของเดิมไม่มีสาขารองรับ
+				-- มันเลยตกไปสาขาสุดท้ายที่ "ลองซ้ำหนึ่งครั้งแล้วต่อท้ายคิว"
+				-- = วิ่งกลับไปหาใบเดิมได้ถึง 3 รอบ รอบละ ~3,400 studs
+				-- ทั้งที่เซิร์ฟบอกชัดแล้วว่ารอบนี้เก็บไม่ได้แน่นอน
+				-- (อาการที่ผู้ใช้เห็น: วาปไปเก็บแล้วติดขัด กลับมาที่เดิมเรื่อยๆ)
+				--
+				-- ทั้งสองแบบจบเหมือนกันคือ "ใบนี้จบแล้ว ไปใบอื่นเลย ห้ามวนกลับ"
+				if tostring(msg):find("already claimed") and nextEgg.AreaId and nextEgg.NestId then
+					-- จำไว้ในชุดของเราด้วย  รอบต่อไป rankedEggs จะกรองออกตั้งแต่ต้น
+					-- ไม่ต้องรอให้เซิร์ฟปฏิเสธซ้ำอีก (ดู Hub.claimedSlots)
+					Hub.ClaimSet = Hub.ClaimSet or {}
+					Hub.ClaimSet[tostring(nextEgg.AreaId) .. ":" .. tostring(nextEgg.NestId)] = true
+					Hub.ClaimLearned = (Hub.ClaimLearned or 0) + 1
+				end
+
+				-- กันไม่ให้ถูกเลือกซ้ำในเที่ยวนี้ ทั้งทางลองซ้ำและทางต่อท้ายคิว
+				eggRetry[nextEgg.Uid] = 99
+				eggTail[nextEgg.Uid] = true
 				--
 				-- นี่คือเหตุผลอันดับหนึ่งที่วัดได้จริง (20 ครั้งใน 75 วินาทีที่ 800 st/s)
 				-- และไม่เกี่ยวกับความเร็วเลย  วัดครบ 4 ระดับแล้ว:
