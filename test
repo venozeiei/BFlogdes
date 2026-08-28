@@ -1341,8 +1341,26 @@ Hub.fpsBoost = function()
 	--
 	-- ไล่ครั้งเดียวตอนเปิด ของใหม่ที่โผล่ทีหลังไม่ตาม เพราะการฟังทุกชิ้น
 	-- ที่เพิ่มเข้ามาแพงกว่าประโยชน์ที่ได้ (ฉากนี้มีของเป็นหมื่นชิ้น)
+	-- ต้องคืนเฟรมระหว่างไล่  ห้ามไล่รวดเดียวจนจบ
+	--
+	-- ฉากนี้มีของหลายหมื่นชิ้น ไล่รวดเดียว = บล็อกเธรดหลักเป็นวินาที
+	-- ระหว่างนั้นโค้ดของเกมที่ต้องส่งสัญญาณ heartbeat ก็ถูกบล็อกไปด้วย
+	--
+	-- หลักฐานจากกล่องดำของลูกค้าสองเครื่อง เทียบเวลาที่ตัววัดเน็ตของเราเอง
+	-- ใช้กว่าจะได้ค่าแรก (ต้องการแค่ 6 ตัวอย่าง x 0.5 วิ = 3 วินาที):
+	--     เครื่องที่ไม่โดน   ได้ค่าที่วินาทีที่ 5
+	--     เครื่องที่โดนเตะ  ได้ค่าที่วินาทีที่ 15   <- ช้ากว่า 3 เท่า
+	-- และเครื่องที่โดนยังค้างที่เฟส "พัก" ตอนวินาทีที่ 14
+	-- ทั้งที่อีกเครื่องเริ่มทำงานไปตั้งแต่วินาทีที่ 7
+	--
+	-- แปลว่าเธรดหลักของเครื่องนั้นถูกบล็อกหนักมากตอนโหลด
+	-- แล้วโดนเตะตอนวินาทีที่ 15 ทั้งที่ยังไม่ได้ขยับหรือยัดค่าอะไรเลยสักครั้ง
+	--
+	-- คืนเฟรมทุก 500 ชิ้น  ช้าลงนิดเดียวแต่ไม่บล็อกใครแล้ว
 	pcall(function()
-		for _, d in ipairs(workspace:GetDescendants()) do
+		local list = workspace:GetDescendants()
+		for i = 1, #list do
+			local d = list[i]
 			if d:IsA("Decal") or d:IsA("Texture") then
 				d.Transparency = 1
 				n = n + 1
@@ -1354,6 +1372,7 @@ Hub.fpsBoost = function()
 				d.Material = Enum.Material.SmoothPlastic
 				d.Reflectance = 0
 			end
+			if i % 500 == 0 then task.wait() end
 		end
 	end)
 	Hub.FpsBoosted = n
@@ -2855,10 +2874,15 @@ Hub.closePopups = function()
 	local pg = LocalPlayer:FindFirstChild("PlayerGui")
 	if pg then roots[#roots + 1] = pg end
 
+	-- ตัวนี้ถูกเรียกซ้ำเรื่อยๆ และไล่ทั้ง CoreGui กับ PlayerGui ทุกครั้ง
+	-- ต้องคืนเฟรมระหว่างไล่เหมือน fpsBoost ด้วยเหตุผลเดียวกัน
+	-- (ดูคอมเมนต์เรื่องเธรดหลักถูกบล็อกที่ Hub.fpsBoost)
 	for _, root in ipairs(roots) do
 		local okd, list = pcall(function() return root:GetDescendants() end)
 		if okd and type(list) == "table" then
-			for _, d in ipairs(list) do
+			for i = 1, #list do
+				local d = list[i]
+				if i % 400 == 0 then task.wait() end
 				local okt, txt = pcall(function()
 					return (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text or nil
 				end)
