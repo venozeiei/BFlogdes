@@ -708,6 +708,25 @@ local Config = {
 	-- false = เขียนพิกัดต่อทั้งที่ล้มอยู่ = กระตุกไปมาอยู่กับที่จนหมดเวลา
 	WaitRagdoll = true,
 
+	-- ลงจากลู่วิ่งไปเก็บ ถ้ามีไข่ใบใหญ่โผล่ระหว่างวิ่ง
+	--
+	-- คิวไข่ถูกสร้างครั้งเดียวตอนเริ่มเที่ยว เก็บครบโควตาแล้วก็ขึ้นลู่วิ่งยาว
+	-- ไข่ที่โผล่มาระหว่างวิ่งจึงไม่มีใครเห็นจนถึงรอบหน้า
+	-- (ลูกค้ารายงาน: กระดานขึ้นไข่ 28 ล้าน/s แต่สคริปต์ไม่ไปเก็บ)
+	RideBreak = true,
+
+	-- เกณฑ์ว่าไข่ต้องใหญ่แค่ไหนถึงคุ้มลงจากลู่  0 = คิดให้เอง
+	--
+	-- คิดเอง = ต้องดีกว่าตัวอ่อนสุดในคอก เพราะเก็บมาแล้วต้องได้อัปเกรดจริง
+	-- การลงมีต้นทุน เสีย speed ที่สะสมไว้ บวกขึ้นลู่ใหม่อีก 1.3 วินาที
+	RideBreakAt = 0,
+
+	-- พื้นขั้นต่ำตอนคิดเอง  กันบัญชีใหม่ที่คอกอ่อนมากจนลงทุก 10 วินาที
+	RideBreakMin = 1000000,
+
+	-- เช็คสนามทุกกี่วินาทีระหว่างวิ่ง
+	RideBreakEvery = 10,
+
 	-- ไล่เก็บไข่ใบแพงสุดจนกว่าจะได้ (ดู chaseTop)
 	--
 	-- ของเดิมใบแพงสุดโดนปฏิบัติเหมือนใบอื่น พลาด 2 ครั้งก็โดนข้าม
@@ -7567,6 +7586,7 @@ Hub.rideTreadmill = function()
 	-- ตำแหน่งไม่ได้ผิด  วัดสดยืนยันแล้วว่าวางแล้วอยู่นิ่ง 20 เฟรมติด ห่าง 0.19
 	Hub.RideLeaving = nil
 	Hub.Riding = true
+	Hub.RideStart = os.clock()   -- ใช้กันไม่ให้เพิ่งขึ้นลู่แล้วลงทันที (ดู Config.RideBreak)
 
 	-- ไปไม่ถึงครั้งแรกไม่ใช่เหตุให้ยกเลิกทั้งรอบ
 	-- (ผู้ใช้เจอ: "พอจะไปวิ่งละมันก็ออก" หลังเข้าเซิร์ฟใหม่)
@@ -7945,6 +7965,44 @@ Hub.rideTreadmill = function()
 						pcall(function() equipBestF:InvokeServer() end)
 						clearPetsCache()
 					end
+				end
+			end
+		end
+
+		-- ลงจากลู่วิ่งถ้ามีไข่ใบใหญ่โผล่ในสนาม
+		--
+		-- อาการที่ลูกค้าเจอ: กระดานขึ้นไข่ 28 ล้าน/s เป็นท็อป 1 แต่สคริปต์ไม่ไปเก็บ
+		--
+		-- ไม่ใช่บั๊กของการจัดอันดับ  มันเรียงถูกแล้วตอนสร้างคิว
+		-- แต่คิวถูกสร้างครั้งเดียวตอนเริ่มเที่ยว พอเก็บครบโควตาก็ขึ้นลู่วิ่งยาว
+		-- ไข่ที่โผล่มาระหว่างวิ่งจึงไม่มีใครเห็นจนกว่าจะถึงรอบหน้า
+		-- (กระดานบนจอเป็นข้อมูลสด จึงเห็นก่อน แต่ตัวเก็บไม่ได้ดูกระดาน)
+		--
+		-- เกณฑ์ตั้งเอง 0 = คิดให้เอง คือต้องดีกว่าตัวอ่อนสุดในคอก
+		-- เพราะการลงไปเก็บมีต้นทุนจริง (เสีย speed ที่สะสม + ขึ้นลู่ใหม่ 1.3 วิ)
+		-- ถ้าไม่ดีกว่าของที่มีอยู่ก็ไม่คุ้มลง
+		if Config.RideBreak ~= false and Hub.RideStart
+			and os.clock() - Hub.RideStart >= 15 then
+			if not Hub.RideEggAt
+				or os.clock() - Hub.RideEggAt >= (tonumber(Config.RideBreakEvery) or 10) then
+				Hub.RideEggAt = os.clock()
+
+				local need = tonumber(Config.RideBreakAt) or 0
+				if need <= 0 then
+					-- ตัวอ่อนสุดในคอก  ไข่ที่ดีกว่านี้เท่านั้นถึงจะคุ้มลงไปเก็บ
+					local pets = myPets()
+					local weak = pets and pets[#pets]
+					need = math.max((weak and tonumber(weak.mps)) or 0,
+						tonumber(Config.RideBreakMin) or 1e6)
+				end
+
+				local okr, ranked = pcall(rankedEggs, Config.Area)
+				local top = okr and ranked and ranked[1]
+				if top and (tonumber(top.rate) or 0) >= need then
+					Hub.RideBreaks = (Hub.RideBreaks or 0) + 1
+					Hub.RideBail = ("เจอไข่ใหญ่ %s/s (เกณฑ์ %s)")
+						:format(comma(math.floor(top.rate)), comma(math.floor(need)))
+					break
 				end
 			end
 		end
