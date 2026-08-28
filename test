@@ -778,6 +778,13 @@ local Config = {
 	-- หลบกับดักที่คนอื่นวางไว้ระหว่างเดินทาง (ดู Hub.trapList)
 	DodgeTraps = true,
 
+	-- ตรวจกับดักถี่แค่ไหนตลอดเส้นทาง หน่วยเป็น studs (ดู Hub.hazardOnPath)
+	--
+	-- ต้องเล็กกว่ารัศมีของกับดัก (วัดจริงได้ 5 studs) ไม่งั้นก้าวข้ามได้
+	-- ของเดิมตรวจแค่จุดปลายของแต่ละเฟรม ซึ่งห่างกันถึง 35 studs ที่ความเร็ว 700
+	-- = บินทะลุกับดักโดยไม่เคยตรวจถึง 86% ของกรณี
+	HazardStep = 4,
+
 	-- หลบการ์ดที่เฝ้าไข่ด้วย (ดู Hub.guardAt)
 	--
 	-- ชนการ์ดตอนแบกไข่กลับ = ไข่หล่น ต้องไปเก็บใหม่หรือเสียไปเลย
@@ -4850,7 +4857,9 @@ Hub.glide = function(hrp, hum, dest)
 		if Config.DodgeTraps ~= false then
 			-- รวมการ์ดที่เฝ้าไข่เข้ามาด้วย (ดู Hub.guardAt)
 			-- ส่ง dest ไปด้วยเพื่อยกเว้นการ์ดที่ยืนคร่อมไข่ที่เราจะไปเก็บ
-			local t = Hub.hazardAt(nextPos, dest)
+			-- ตรวจตลอดเส้นทางจากที่ยืนอยู่ถึงจุดที่จะไป (ดู Hub.hazardOnPath)
+			-- ของเดิมตรวจแค่ nextPos จึงบินทะลุกับดักที่อยู่ระหว่างทางได้
+			local t = Hub.hazardOnPath(hrp.Position, nextPos, dest)
 			if t then
 				-- เวกเตอร์ตั้งฉากกับทิศที่วิ่ง เลือกข้างที่ออกห่างกับดักมากกว่า
 				local side = Vector3.new(-dir.Z, 0, dir.X)
@@ -4886,8 +4895,9 @@ Hub.glide = function(hrp, hum, dest)
 				local push = t.r + 2
 				local try = nextPos + side * push
 				-- เบี่ยงแล้วยังชนอีกก็เบี่ยงอีกฝั่ง
-				if Hub.hazardAt(try, dest) then try = nextPos - side * push end
-				if not Hub.hazardAt(try, dest) then
+				-- ทางเบี่ยงก็ต้องตรวจตลอดเส้นเหมือนกัน ไม่ใช่ตรวจแค่ปลายทาง
+				if Hub.hazardOnPath(hrp.Position, try, dest) then try = nextPos - side * push end
+				if not Hub.hazardOnPath(hrp.Position, try, dest) then
 					nextPos = try
 					Hub.TrapDodged = (Hub.TrapDodged or 0) + 1
 				end
@@ -6049,6 +6059,43 @@ end
 -- ตำแหน่งนี้อันตรายไหม  รวมทั้งกับดักและการ์ดไว้ที่เดียว
 Hub.hazardAt = function(pos, dest)
 	return Hub.trapAt(pos) or Hub.guardAt(pos, dest)
+end
+
+--==================================================================
+-- ตรวจตลอดเส้นทางที่จะผ่าน  ไม่ใช่แค่จุดที่จะไปถึง
+--
+-- อาการที่ผู้ใช้เจอ: "วาปกลับมาไม่มีใครอยู่เลย แต่มันล้มเอง"
+--
+-- ของเดิมตรวจแค่ตำแหน่งปลายทางของเฟรมนั้น ซึ่งพลาดเป็นปกติ
+--     รัศมีกับดัก        5 studs   (วัดจริง PlayerTrap ขนาด 1.9 x 1.8)
+--     ระยะต่อเฟรมที่ 700  35 studs
+--     ระยะต่อเฟรมที่ 268  13 studs
+--
+-- ก้าวใหญ่กว่ารัศมี 7 เท่า  โอกาสที่เฟรมจะตกลงในรัศมีพอดีมีราว 14%
+-- อีก 86% คือบินทะลุกับดักไปโดยไม่เคยตรวจเลยสักครั้ง
+--
+-- เจอกับดัก = เซิร์ฟตั้ง RagdollEndTime + ไข่ที่ถืออยู่หล่น
+-- ซึ่งคือทั้งอาการ "ล้มเอง" และ "ไข่หล่นทั้งที่ไม่มีใครตี"
+--
+-- ก้าวตรวจต้องเล็กกว่ารัศมีของสิ่งที่เล็กที่สุด ไม่งั้นข้ามได้เหมือนเดิม
+-- จำกัดจำนวนจุดไว้กันเฟรมหนักตอนก้าวยาวผิดปกติ
+--==================================================================
+Hub.hazardOnPath = function(from, to, dest)
+	if typeof(from) ~= "Vector3" or typeof(to) ~= "Vector3" then return nil end
+	local d = to - from
+	local m = d.Magnitude
+	if m < 0.001 then return Hub.hazardAt(to, dest) end
+
+	local step = math.max(1, tonumber(Config.HazardStep) or 4)
+	local n = math.clamp(math.ceil(m / step), 1, 24)
+	for i = 1, n do
+		local hit = Hub.hazardAt(from + d * (i / n), dest)
+		if hit then
+			Hub.PathHits = (Hub.PathHits or 0) + 1
+			return hit
+		end
+	end
+	return nil
 end
 
 Hub.resetWindow = function()
