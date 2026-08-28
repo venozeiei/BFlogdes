@@ -2099,8 +2099,40 @@ Hub.rq = function(fn, ...)
 	-- = อาการเดียวกับที่ตั้งใจจะกันตั้งแต่แรก คือกันไม่ได้จริง
 	Hub.RemoteBusy = true
 	Hub.pace()
-	local packed = table.pack(pcall(fn, ...))
-	Hub.RemoteBusy = false
+
+	-- ต้องยิงในเธรดแยกแล้วนับเวลาข้างนอก  ห้ามเรียกตรงๆ
+	--
+	-- InvokeServer ของ Roblox ไม่มี timeout ในตัว
+	-- เซิร์ฟเงียบเมื่อไหร่ = เธรดนี้ค้างตลอดกาล และบรรทัดปลดธงข้างล่าง
+	-- ไม่มีวันถูกเรียก  ผลคือ RemoteBusy ค้างเป็น true ถาวร
+	-- ทุกการยิงหลังจากนั้นรอ 6 วินาทีแล้วผ่านไปโดยไม่มีคิวคุม
+	-- และลูปที่เรียกตัวนี้อยู่ก็หยุดนิ่งไปด้วย
+	--
+	-- อาการที่ผู้ใช้เห็น: "วาปแล้วค้าง ไม่ไปไหนต่อ"
+	-- ยืนยันจากล็อกของลูกค้าที่โดนเตะ: ตัวละครหยุดที่ x3399
+	-- ตัวนับ arm หยุดเพิ่ม เฟสค้างที่ "วาปเก็บไข่ (1/5)" ไม่เปลี่ยนอีกเลย
+	--
+	-- Hub.callTimed แก้เรื่องนี้ถูกต้องอยู่แล้ว แต่ทางที่ยิงบ่อยที่สุด
+	-- (snapshot · วางไข่ · ฟักไข่) กลับใช้ตัวนี้ซึ่งไม่มีเวลาหมดอายุ
+	local args = table.pack(...)
+	local done, packed = false, nil
+	task.spawn(function()
+		packed = table.pack(pcall(fn, table.unpack(args, 1, args.n)))
+		done = true
+		Hub.RemoteBusy = false
+	end)
+
+	local limit = os.clock() + math.max(1, tonumber(Config.CallTimeout) or 4)
+	while not done and os.clock() < limit do task.wait() end
+
+	if not done then
+		-- หมดเวลาแล้วต้องปลดคิวเอง ไม่งั้นล็อกทั้งสคริปต์
+		-- เธรดที่ยังค้างจะปลดซ้ำเองตอนเซิร์ฟตอบ ซึ่งไม่เป็นไร
+		Hub.RemoteBusy = false
+		Hub.RemoteHang = (Hub.RemoteHang or 0) + 1
+		return nil
+	end
+
 	if not packed[1] then
 		Hub.RemoteErr = (Hub.RemoteErr or 0) + 1
 		return nil
@@ -3634,8 +3666,25 @@ Hub.acState = function()
 		for _, v in pairs(getgc(true)) do
 			if type(v) == "function" then
 				local oi, info = pcall(debug.getinfo, v)
+				-- ค้นจากชื่อโมดูลแบบกว้าง ไม่ใช่เจาะจงไฟล์เดียว
+				--
+				-- ของเดิมหา "UGI.ContentCatalog.Runtime" ตรงๆ
+				-- วัดจริงหลังเกมอัปเดต 26/8/2569: มีฟังก์ชันที่ถือตารางสถานะ 8 ตัว
+				-- แต่ตรงกับชื่อนั้นแค่ 1 ตัว  อีก 7 ตัวอยู่ที่
+				--     ReplicatedFirst.UGI.ContentCatalog          4 ตัว
+				--     ReplicatedFirst.UGI.ContentCatalog.Surface  3 ตัว
+				--
+				-- = เราพึ่งฟังก์ชันตัวเดียวจากแปดตัว ถ้ารอบนั้นไม่เจอก็จบ
+				-- หาตารางไม่เจอ -> armImpulse ล้มเหลว -> ตกไปใช้ความเร็วตามกฎ
+				-- ซึ่งผู้ใช้เห็นเป็นอาการ "วาปไม่ไป" (มันขยับ แต่คลาน)
+				--
+				-- และอธิบายได้ว่าทำไมบางคนเป็นบางคนไม่เป็น
+				-- มันขึ้นกับจังหวะหน่วยความจำตอนสแกน ไม่ใช่ตัวรันหรือคอนฟิก
+				--
+				-- ตัดคำว่า .Runtime ออก เหลือ "UGI.ContentCatalog" = ครอบทั้ง 8 ตัว
+				-- ยังกรองแคบพอ ไม่ไปโดนโมดูลอื่นของเกม
 				if oi and info and string.find(tostring(info.source or ""),
-				   "UGI.ContentCatalog.Runtime", 1, true) then
+				   "UGI.ContentCatalog", 1, true) then
 					local ok, ups = pcall(debug.getupvalues, v)
 					if ok and type(ups) == "table" then
 						for _, u in pairs(ups) do
