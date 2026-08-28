@@ -43,7 +43,7 @@ Hub.Gen = GEN
 Hub.Phase = "พัก"
 -- ชื่อรุ่น  เปลี่ยนทุกครั้งที่แก้ของสำคัญ เพื่อเช็คได้ว่าลูกค้ารันตัวไหนอยู่
 -- ให้ลูกค้าดูได้ด้วย:  print(getgenv().EGG_FARM_HUB.Build)
-Hub.Build = "net-adapt-1"
+Hub.Build = "standalone-1"
 
 -- จุดยืนกลาง SAFE ZONE ที่ใช้จริง วัดจากในเกม
 -- แก้ตรงนี้ที่เดียวถ้าอยากย้ายจุดยืนของทุกเครื่อง
@@ -102,7 +102,7 @@ local Config = {
 	-- ปิดไว้ เพราะการสู้กับตัวที่กำลังดึงเราออกคือเงื่อนไขที่ระบบใหม่ใช้ตัดสินว่า
 	-- "แก้ไขไม่สำเร็จ" แล้วยกระดับเป็นเตะออก (ดูคำอธิบายเต็มที่ Hub.pinAt)
 	-- เปิดได้ถ้าจะทดลอง แต่อย่าเปิดบนเครื่องลูกค้า
-	PinHold     = false,
+	PinHold     = true,
 
 	-- วาปทีเดียวถึงแบบของเดิม ไม่คุมความเร็ว
 	--
@@ -183,13 +183,13 @@ local Config = {
 	-- ลูกค้าบางคนแก้เองด้วยการรันสคริปต์ค่ายอื่นก่อน ซึ่งได้ผลเพราะมันถ่วงเวลา
 	-- เราหน่วงเองตรงนี้ ไม่ต้องพึ่งสคริปต์คนอื่น
 	-- เครื่องช้ามากตั้งเพิ่มเป็น 25-30 ได้
-	StartupGrace = 15,
+	StartupGrace = 1,
 
 	-- ยืนจุดกลางอย่างเดียว ไม่วาปเข้าแปลงเลย
 	--
 	-- ต้องประกาศตรงนี้ ไม่งั้น loader ตั้งมาก็ไม่มีผล
 	-- mergeConfig ปฏิเสธคีย์ที่ยังไม่มีในตารางนี้ (เช็ค "if cur ~= nil then")
-	StayCentre  = false,
+	StayCentre  = true,
 
 	-- เพดานสูงสุด (studs/วินาที)
 	--
@@ -210,7 +210,7 @@ local Config = {
 	-- ตั้ง 320 ให้ต่ำกว่านิดหน่อยเผื่อความคลาดเคลื่อน
 	--
 	-- และยังเร็วกว่าสัตว์เฝ้าทุกโซน (เร็วสุดคือ Cosmic 200)
-	MoveSpeed   = 320,
+	MoveSpeed   = 700,
 
 	-- เผื่อเพดานความเร็วไว้กี่ส่วน  1.0 = ชนเพดานเป๊ะ (อย่าทำ)
 	-- ใช้เฉพาะตอนเปิดโหมดยกเว้นไม่ได้
@@ -245,7 +245,7 @@ local Config = {
 
 	-- ไปยืนทับไข่ที่แพงสุดรอตั้งแต่ยังรีเซ็ตไม่จบ จะได้เก็บก่อนคนอื่น
 	-- โดนตีเมื่อไหร่ถอยกลับเซฟโซนเอง  ตั้ง false ถ้าไม่อยากเสี่ยง
-	PreWarpOnReset = true,
+	PreWarpOnReset = false,
 
 	-- ทำงานบ้าน (ฟักไข่ อัปฐาน วางสัตว์ ขายตัวอ่อน) ทุกกี่รอบ
 	-- 1 = ทุกรอบเหมือนเดิม  5 = ทำทุกรอบที่ 5 ระหว่างนั้นเอาเวลาไปเก็บไข่
@@ -303,7 +303,7 @@ local Config = {
 	-- ช่วงไข่เพิ่งรีเซ็ต เก็บติดกันได้กี่ใบก่อนแวะไปวางลงรัง
 	-- ปกติใช้ ChainGrab (5) แต่ช่วงรีเซ็ตของดีมีให้แย่งแค่ไม่กี่วินาที
 	-- ต้องกวาดให้หมดก่อน ค่อยไปวางตอนสนามเงียบแล้ว
-	ChainGrabFresh = 12,
+	ChainGrabFresh = 5,
 
 	PreResetQuiet = 20,
 
@@ -383,7 +383,7 @@ local Config = {
 	-- เลยแวะไปลองฟักทุกกี่วินาทีตอนที่ว่างจากการเก็บไข่
 	HatchRetryEvery = 30,
 
-	SellPerCycle = 4,
+	SellPerCycle = 0,
 
 	TendEvery = 5,
 
@@ -398,7 +398,7 @@ local Config = {
 	-- แยกออกจาก Running เพราะ Running โดนบังคับเป็น false ทุกครั้งที่โหลดคอนฟิก
 	-- (กันไม่ให้ค่าที่เผลอเซฟไว้สั่งบอทออกวิ่งเองโดยไม่ตั้งใจ)
 	-- ส่วน AutoStart ต้องตั้งเองเท่านั้น = เจตนาชัด
-	AutoStart   = false,
+	AutoStart   = true,
 
 	-- false = ไม่สร้างหน้าต่าง UI เลย  ใช้ตอนสั่งงานผ่านคอนฟิกล้วนๆ
 	-- ประหยัดเฟรม เหมาะกับเปิดหลายจอทิ้งไว้
@@ -435,7 +435,7 @@ local Config = {
 	PerfMode    = true,
 	FpsBoost    = true,  -- ตัดเงา พื้นผิว อนุภาค ลดคุณภาพภาพ
 	BlankScreen = false, -- ปิดการวาดภาพ 3 มิติ จอว่างแต่เฟรมพุ่งสุด
-	SkipWeak    = true,  -- ไข่ที่กากกว่าตัวอ่อนสุดในคอก ไม่ต้องไปเก็บ
+	SkipWeak    = false,  -- ไข่ที่กากกว่าตัวอ่อนสุดในคอก ไม่ต้องไปเก็บ
 	AntiAFK     = true,
 
 	KeepExtra   = 0,     -- เก็บสำรองเกินช่องคอกกี่ตัวก่อนเริ่มขาย
@@ -449,7 +449,7 @@ local Config = {
 	-- ห้ามเก็บไข่ที่แย่กว่าตัวอ่อนสุดที่มี แม้คอกจะยังมีช่องว่าง
 	-- true  = ไม่มีของดีก็ยืนเฉยๆ รอเวฟถัดไป
 	-- false = แบบเดิม ช่องว่างทำเงิน $0 เก็บอะไรมาก็ดีกว่า
-	SkipWorseThanPen = true,
+	SkipWorseThanPen = false,
 
 	-- ตอนคอกยังมีช่องว่าง ไข่ต้องแรงอย่างน้อยกี่ % ของสัตว์ที่ดีที่สุดที่มี
 	-- ช่องว่างทำเงิน $0 เก็บอะไรมาก็ได้เพิ่ม แต่ไม่ควรไล่เก็บของไร้ค่า
@@ -607,7 +607,7 @@ local Config = {
 	--
 	-- ลูกค้าที่โดน "You have been removed for cheating" ทันทีที่เริ่มวาป
 	-- คือเครื่องที่ปะไม่ติด แล้ววิ่ง 700 ทั้งที่ระบบตรวจยังทำงานเต็มที่
-	RequirePatch = true,
+	RequirePatch = false,
 
 	-- สแกนหน่วยความจำนานเกินกี่วินาที ถือว่าเครื่องนี้ช้าเกิน แล้วปิดสแกนถาวร
 	--
@@ -626,7 +626,7 @@ local Config = {
 	--
 	-- true  = เครื่องอ่อนถอยลงมาใช้ทางปลอดภัย (ช้ากว่าแต่ไม่โดนเตะ)
 	-- false = ทุกเครื่องได้ของเต็มเหมือนกัน (เสี่ยงกับเครื่องอ่อน)
-	AutoWeakMode = true,
+	AutoWeakMode = false,
 
 	-- เฟรมเรตต่ำกว่านี้ถือว่าเครื่องอ่อน  วัดจากค่าเฉลี่ย 3 วินาทีแรก
 	WeakFpsLimit = 25,
@@ -818,6 +818,15 @@ local Config = {
 	-- ตัวชี้วัดที่ถูกคือ leaderstats.Speed ที่เพิ่มขึ้นจริง
 	-- (วัดสด: ยืนไปหนึ่งรอบ Speed 10 -> 11,770 · WalkSpeed 18.3 -> 54.8)
 	RideTreadmill = true,
+
+	-- ออกไปเก็บไข่กลางสนามไหม
+	--
+	-- ตั้ง false = โหมด "วิ่งอย่างเดียว"  ทำแค่งานฐานกับยืนวิ่งลู่สะสม speed
+	-- ตัวไม่ออกจากเซฟโซนเลย  ลูกค้าบางคนอยากได้แค่นี้
+	-- (ไม่โดนคนอื่นตี ไม่โดนกับดัก และดูไม่ออกว่าใช้สคริปต์)
+	--
+	-- ปิดตัวนี้แล้วลู่วิ่งยังทำงานปกติ  เพราะแยก Hub.rideIfWorth ออกมาแล้ว
+	CollectEggs = true,
 }
 Hub.Config = Config
 
@@ -5954,21 +5963,95 @@ end
 -- "Cannot carry eggs while trapped"  และไข่ที่แบกอยู่หล่น
 --
 -- __DEBRIS เป็นโฟลเดอร์เล็ก สแกนทุก 3 วินาทีก็ไม่หนัก
+-- รัศมีอันตรายจริงของแต่ละชนิด  อ่านมาจากโค้ดเกม ไม่ได้เดาจากขนาดชิ้นส่วน
+--
+-- SubspaceTrap เป็นตัวที่เล่นงานเราหนักสุด และหาสาเหตุยากที่สุด
+-- (ผู้ใช้รายงาน: "ไม่ได้มีกับดักหรือสัตว์มาไล่เลย แต่มันเหมือนสะดุดพื้นแล้วล้ม")
+--
+-- เหตุที่มองไม่เห็นคือมันล่องหนจริงๆ  ตัวสคริปต์ของมันไล่ Transparency ขึ้น 1
+-- ภายใน FADE_DURATION = 3 วินาทีหลังวาง  และคำอธิบายไอเทมเขียนไว้ตรงๆ ว่า
+-- "Place invisible traps that stun enemies"
+--
+-- ที่ร้ายกว่านั้นคือมันไม่ต้องชน  activateTrap เช็คระยะจากจุดวางเป็นวงกลม
+--     TRIGGER_RADIUS   = 8      <- เข้าใกล้ 8 studs ก็ระเบิดแล้ว
+--     RAGDOLL_DURATION = 4.5    <- ตรงกับ "รอลุก 3.4s" ที่ผู้ใช้ถ่ายมา
+-- แล้วเรียก GameplayToolGuard.DropHeldEggFromPlayerHit = ไข่ที่แบกอยู่หล่นด้วย
+--
+-- สูตรเดิม (ครึ่งความกว้าง + 4) ให้รัศมี 1 + 4 = 5 กับชิ้นขนาด 2x2x2 นี้
+-- น้อยกว่าของจริง 3 studs = เราเบี่ยงหลบแล้วแต่ยังอยู่ในวงระเบิดอยู่ดี
+Hub.HazardRadius = {
+	subspacetrap = 8,      -- SubspaceMine.TRIGGER_RADIUS
+	playertrap   = nil,    -- ต้องชนถึงติด คิดจากขนาดจริงพอ
+}
+
+-- รัศมีที่ควรหลบของชิ้นนี้
+Hub.hazardRadiusOf = function(part)
+	local fixed = Hub.HazardRadius[part.Name:lower()]
+	-- +4 คือระยะเผื่อตัวละคร เท่าของเดิม  ต้องบวกทั้งสองทางเหมือนกัน
+	-- ไม่งั้นเราจะเฉียดขอบวงพอดีแล้วโดนเพราะ ping คลาดนิดเดียว
+	if fixed then return fixed + 4 end
+	return math.max(part.Size.X, part.Size.Z) * 0.5 + 4
+end
+
+-- ชิ้นนี้เป็นของอันตรายไหม
+Hub.isHazardPart = function(d)
+	if not d:IsA("BasePart") or not d.CanTouch then return false end
+	local n = d.Name:lower()
+	return (n:find("trap") or n:find("mine")) ~= nil
+end
+
+--==================================================================
+-- จำกับดักที่โผล่มาใหม่ ไม่ว่ามันจะไปอยู่โฟลเดอร์ไหน
+--
+-- ของเดิมสแกนแค่ workspace.__DEBRIS ซึ่งเป็นที่อยู่ของ PlayerTrap
+-- แต่เราไม่มีโค้ดฝั่งเซิร์ฟที่วาง SubspaceTrap จึงไม่รู้ว่ามันไปลงโฟลเดอร์ไหน
+-- และจะไล่สแกนทั้ง workspace ทุก 3 วินาทีก็ไม่ไหว (วัดสด: 29,025 ชิ้น)
+--
+-- ดักตอน "ถูกเพิ่มเข้ามา" แทน  เสียแรงแค่เช็คชื่อครั้งเดียวต่อชิ้นที่เกิดใหม่
+-- ได้ทั้งความครอบคลุมและไม่กินซีพียู
+--==================================================================
+Hub.NewHazards = Hub.NewHazards or {}
+if not Hub.HazardHook then
+	Hub.HazardHook = workspace.DescendantAdded:Connect(function(d)
+		if Hub.isHazardPart(d) then
+			Hub.NewHazards[d] = true
+			Hub.HazardSeen = (Hub.HazardSeen or 0) + 1
+		end
+	end)
+end
+
 Hub.trapList = function()
 	if os.clock() - (Hub.TrapScanAt or -1e9) < 3 then return Hub.Traps or {} end
 	Hub.TrapScanAt = os.clock()
 	local out = {}
+	local added = {}
+
+	local function take(d)
+		if added[d] then return end
+		added[d] = true
+		-- id ไว้ให้ตัวเบี่ยงจำได้ว่ากำลังหลบอันไหนอยู่ (ดู Hub.dodgeSide)
+		out[#out + 1] = { p = d.Position, r = Hub.hazardRadiusOf(d), id = d }
+	end
+
 	local deb = workspace:FindFirstChild("__DEBRIS")
 	if deb then
 		for _, d in ipairs(deb:GetDescendants()) do
-			if d:IsA("BasePart") and d.CanTouch and d.Name:lower():find("trap") then
-				-- รัศมีอันตราย = ครึ่งความกว้างที่ใหญ่สุด บวกตัวละครอีกนิด
-				local r = math.max(d.Size.X, d.Size.Z) * 0.5 + 4
-				-- id ไว้ให้ตัวเบี่ยงจำได้ว่ากำลังหลบอันไหนอยู่ (ดู Hub.dodgeSide)
-				out[#out + 1] = { p = d.Position, r = r, id = d }
-			end
+			if Hub.isHazardPart(d) then take(d) end
 		end
 	end
+
+	-- ตัวที่ดักไว้ตอนเกิด  ทิ้งอันที่หลุดออกจากเกมไปแล้ว ไม่งั้นตารางบวมเรื่อยๆ
+	for d in pairs(Hub.NewHazards) do
+		if d.Parent == nil or not d:IsDescendantOf(workspace) then
+			Hub.NewHazards[d] = nil
+		elseif d.CanTouch then
+			take(d)
+		else
+			-- CanTouch = false แปลว่าระเบิดไปแล้ว ไม่ต้องหลบอีก
+			Hub.NewHazards[d] = nil
+		end
+	end
+
 	Hub.Traps = out
 	Hub.TrapCount = #out
 	return out
@@ -7443,6 +7526,44 @@ local function autoUpgradeBase()
 	return done
 end
 
+-- ไปยืนวิ่งลู่ ถ้าเวลาที่เหลือคุ้มพอ
+--
+-- ของเดิมโค้ดก้อนนี้ฝังอยู่ปลายทางของ "เก็บไข่สำเร็จ" ที่เดียว
+-- แปลว่าใครปิดการเก็บไข่ (โหมดวิ่งอย่างเดียว) จะไม่มีวันได้วิ่งเลย
+-- เพราะไปไม่ถึงบรรทัดนั้น  แยกออกมาเป็นฟังก์ชันเพื่อเรียกได้จากสองทาง
+--
+-- ห้ามเรียกก่อนงานฐาน  ยืนวิ่งกินเวลาเป็นนาที ถ้าขึ้นไปก่อนวางไข่กับขายสัตว์
+-- ไข่ที่เพิ่งเก็บมาจะค้างในกระเป๋าทั้งช่วงนั้น ไม่ได้ฟัก ไม่ได้เงิน
+-- (ผู้ใช้ทัก: "เก็บ 5 ใบเสร็จมาวิ่งเลย มันยังไม่ทันวางไข่เปิดไข่กะขายสัตว์")
+Hub.rideIfWorth = function()
+	if Config.RideTreadmill == false then return false end
+
+	-- ตัวยืนวิ่งออกมาเองเมื่อเหลือเวลาเท่า PreResetHold แล้วปลดสถานะให้เรียบร้อย
+	-- ต้องมีเวลาเหลือมากพอถึงจะคุ้มไป ไม่งั้นวิ่งไปกลับเปล่าๆ
+	local left = Hub.nightIn() or secondsToReset()
+	local need = (tonumber(Config.PreResetHold) or 20) + 30
+	Hub.RideTry     = (Hub.RideTry or 0) + 1
+	Hub.RideTryLeft = left            -- เวลาที่เหลือตอนตัดสินใจ
+	Hub.RideTryNeed = need
+
+	if left ~= nil and left > need then
+		pcall(Hub.rideTreadmill)
+		-- วิ่งจบแล้วห้ามออกไปเก็บไข่อีกจนกว่าไข่จะรีเซ็ต
+		--
+		-- รอบหนึ่งเก็บแค่ top5 ครั้งเดียว แล้ววิ่งยาวจนใกล้กลางคืน
+		-- ตัวยืนวิ่งออกมาเองตอนเหลือ 20 วิ ซึ่งเป็นเวลาที่ต้องไปรอจุดกลางพอดี
+		-- ไม่ใช่เวลาที่จะออกไปเก็บรอบสอง (ผู้ใช้สั่ง: "ไม่ต้องวาปไปเก็บไข่รอบ 2")
+		Hub.RideDoneAt = os.clock()
+		return true
+	end
+
+	-- ไม่คุ้มไป จดไว้ว่าเพราะอะไร จะได้ไม่ต้องเดา
+	Hub.RideSkip = (Hub.RideSkip or 0) + 1
+	Hub.RideSkipWhy = (left == nil) and "อ่านเวลาไม่ได้"
+		or ("เหลือ " .. math.floor(left) .. " วิ ต้องการเกิน " .. need)
+	return false
+end
+
 local function tendBase()
 	-- สนามรีเซ็ต = ทิ้งงานบ้านทันที ออกไปเก็บไข่ก่อน
 	--
@@ -8511,6 +8632,25 @@ local function warpCycle()
 		return nil
 	end
 
+	-- โหมด "วิ่งอย่างเดียว"  ไม่ออกไปเก็บไข่ ทำแค่งานฐานแล้วขึ้นลู่
+	--
+	-- ต้องดักตรงนี้ ก่อน findEgg  ไม่ใช่ไปดักที่ตัว move
+	-- ถ้าปล่อยให้เข้าไปในเส้นทางเก็บไข่แล้วค่อยกั้นทีหลัง
+	-- สถิติจะเด้ง "พลาด" ขึ้นทุกวินาที ทั้งที่ผู้ใช้ตั้งใจปิดเอง
+	--
+	-- Hub.RideDoneAt ด้านบนเป็นตัวคุมจังหวะให้เอง วิ่งรอบละครั้งต่อการรีเซ็ต
+	if Config.CollectEggs == false then
+		if baseNeedsWork() then
+			Hub.Phase = "วิ่งอย่างเดียว - จัดการฐาน"
+			tendBase()
+			move(warpHome)
+		end
+		Hub.Phase = "วิ่งอย่างเดียว"
+		-- ไม่ได้ขึ้นลู่รอบนี้ = ต้องหน่วง ไม่งั้นลูปหมุนฟรีกินซีพียู
+		if not Hub.rideIfWorth() then task.wait(1) end
+		return nil
+	end
+
 	local egg, rate = findEgg(Config.Area)
 	if not egg then return "ไม่มีไข่ว่างที่ " .. Config.Area end
 	rate = rate or 0
@@ -9296,36 +9436,8 @@ local function warpCycle()
 			move(warpHome)
 
 			-- งานฐานเสร็จแล้วค่อยไปยืนวิ่งสะสม speed จนใกล้รีเซ็ต
-			--
-			-- ต้องทำหลังงานฐานเสมอ  ห้ามย้ายขึ้นไปก่อน
-			-- ยืนวิ่งกินเวลาเป็นนาที ถ้าขึ้นไปก่อนวางไข่กับขายสัตว์
-			-- ไข่ที่เพิ่งเก็บมาจะค้างในกระเป๋าทั้งช่วงนั้น ไม่ได้ฟัก ไม่ได้เงิน
-			-- และไอดีใหม่ที่ยังไม่มีเงินซื้อลู่วิ่งจะยิ่งเสียเวลาเปล่า
-			-- (ผู้ใช้ทัก: "เก็บ 5 ใบเสร็จมาวิ่งเลย มันยังไม่ทันวางไข่เปิดไข่กะขายสัตว์")
-			--
-			-- ตัวมันเองจะออกมาเมื่อเหลือเวลาเท่า PreResetHold แล้วปลดสถานะให้เรียบร้อย
-			-- ต้องมีเวลาเหลือมากพอถึงจะคุ้มไป ไม่งั้นวิ่งไปกลับเปล่าๆ
-			if Config.RideTreadmill ~= false then
-				local left = Hub.nightIn() or secondsToReset()
-				local need = (tonumber(Config.PreResetHold) or 20) + 30
-				Hub.RideTry = (Hub.RideTry or 0) + 1
-				Hub.RideTryLeft = left            -- เวลาที่เหลือตอนตัดสินใจ
-				Hub.RideTryNeed = need
-				if left ~= nil and left > need then
-					pcall(Hub.rideTreadmill)
-					-- วิ่งจบแล้วห้ามออกไปเก็บไข่อีกจนกว่าไข่จะรีเซ็ต
-					--
-					-- รอบหนึ่งเก็บแค่ top5 ครั้งเดียว แล้ววิ่งยาวจนใกล้กลางคืน
-					-- ตัวยืนวิ่งออกมาเองตอนเหลือ 20 วิ ซึ่งเป็นเวลาที่ต้องไปรอจุดกลางพอดี
-					-- ไม่ใช่เวลาที่จะออกไปเก็บรอบสอง (ผู้ใช้สั่ง: "ไม่ต้องวาปไปเก็บไข่รอบ 2")
-					Hub.RideDoneAt = os.clock()
-				else
-					-- ไม่คุ้มไป จดไว้ว่าเพราะอะไร จะได้ไม่ต้องเดา
-					Hub.RideSkip = (Hub.RideSkip or 0) + 1
-					Hub.RideSkipWhy = (left == nil) and "อ่านเวลาไม่ได้"
-						or ("เหลือ " .. math.floor(left) .. " วิ ต้องการเกิน " .. need)
-				end
-			end
+			-- ต้องทำหลังงานฐานเสมอ  ห้ามย้ายขึ้นไปก่อน (เหตุผลอยู่ที่ตัวฟังก์ชัน)
+			Hub.rideIfWorth()
 
 			Hub.Phase = "ยืนรอที่ SAFE ZONE"
 			return nil
@@ -10069,6 +10181,25 @@ local function buildUI(A)
 	A.toggle("เริ่มฟาร์มอัตโนมัติตอนโหลด", "เปิดแล้วไม่ต้องมากดเริ่มเอง", Config.AutoStart, function(v)
 		Config.AutoStart = v
 	end)
+
+	-- สองปุ่มนี้ให้ลูกค้าเลือกเองว่าจะเอาแบบไหน ไม่ต้องแก้คอนฟิก
+	--
+	-- ปิดทั้งคู่ = ทำแค่งานฐาน (วางไข่ ฟัก ขาย อัปฐาน)
+	-- ปิดเก็บไข่อย่างเดียว = โหมดวิ่งสะสม speed ตัวไม่ออกจากเซฟโซนเลย
+	A.toggle("ออกไปเก็บไข่กลางสนาม", "ปิด = อยู่แต่ในฐาน วิ่งลู่สะสม speed อย่างเดียว",
+		Config.CollectEggs ~= false, function(v)
+			Config.CollectEggs = v
+			-- ค้างธง "วิ่งครบรอบแล้ว" อยู่ตอนกดเปิด จะไม่ออกไปเก็บจนกว่าไข่จะรีเซ็ต
+			-- กดแล้วต้องไปเลย ไม่ใช่รออีกรอบ
+			if v then Hub.RideDoneAt = nil end
+			log(v and "เปิดการเก็บไข่" or "ปิดการเก็บไข่ - เหลือแค่วิ่งลู่")
+		end)
+	A.toggle("ยืนวิ่งลู่สะสม speed", "ทำหลังงานฐานเสร็จ จนใกล้เวลารีเซ็ต",
+		Config.RideTreadmill ~= false, function(v)
+			Config.RideTreadmill = v
+			log(v and "เปิดการวิ่งลู่" or "ปิดการวิ่งลู่")
+		end)
+
 	setStatus = A.label("สถานะ", "อัปเดตทุกครึ่งวินาที")
 	setLogBox = A.label("ล็อก", "6 บรรทัดล่าสุด")
 
@@ -10109,6 +10240,15 @@ local function buildUI(A)
 			log("โหมดเคลื่อนที่: " .. v)
 		end)
 
+	-- ความเร็วของโหมด warp ซึ่งเป็นโหมดที่ใช้จริง
+	--
+	-- ของเดิมไม่มีช่องนี้ใน UI เลย ทั้งที่เป็นตัวเลขที่มีผลที่สุด
+	-- ใครไม่ได้ใช้คอนฟิกจึงแก้ไม่ได้ ต้องทนใช้ค่าเริ่มต้นอย่างเดียว
+	-- (ช่อง "ก้าวละกี่ studs" ด้านล่างใช้กับโหมด step/tween ไม่ใช่ warp)
+	A.input("ความเร็ววาป (studs/s)", "700 = ค่าที่วัดแล้วเก็บไข่ติดทุกใบ", Config.MoveSpeed, function(v)
+		Config.MoveSpeed = math.clamp(math.floor(v), 60, 2000)
+		log(("ความเร็ววาป %d studs/s"):format(Config.MoveSpeed))
+	end)
 	A.input("ก้าวละกี่ studs", "เพดานที่วัดได้ = 60 เกินนี้โดนลากกลับ", Config.Step, function(v)
 		Config.Step = math.clamp(math.floor(v), 5, 120)
 	end)
@@ -10356,13 +10496,23 @@ task.spawn(function()
 			local ok, err, success = pcall(cycle)
 			if not ok then
 				log("error:", err)
+				Hub.LastWhy, Hub.LastWhyAt = "error: " .. tostring(err), os.clock()
 			elseif err then
 				-- ตอนยืนรอไข่ดีๆ ข้อความจะซ้ำทุก 2 วิ ไม่ต้องถมล็อก
 				if err ~= lastLine then log(err) end
 				lastLine = err
+
+				-- เก็บเหตุผลล่าสุดไว้ให้แถบสถานะโชว์ด้วย
+				--
+				-- ของเดิมเหตุผลไปอยู่ใน log() อย่างเดียว ซึ่งอยู่ในแผง UI
+				-- ลูกค้าส่วนใหญ่ปิดแผงไว้ (ShowUI=false) จึงไม่มีใครเห็นเลย
+				-- เวลาเจอปัญหาก็ได้แต่ภาพ "ได้ 0 · พลาด 12" ซึ่งบอกอะไรไม่ได้
+				-- (เคสจริง: ลูกค้าส่งคลิปมา เห็นแต่ตัวเลข ไล่สาเหตุต่อไม่ได้เลย)
+				Hub.LastWhy, Hub.LastWhyAt = err, os.clock()
 			elseif success then
 				log("✓ ส่งไข่เข้าฐานแล้ว")
 				lastLine = nil
+				Hub.LastWhy, Hub.LastWhyAt = nil, nil
 			end
 			-- โหมดวาปทำงานจบรอบใน ~2 วิ ถ้ายังคั่น 2 วิเท่าเดิมคือเสียเวลาไปครึ่งหนึ่ง
 			task.wait(Config.MoveMode == "warp"
@@ -10425,13 +10575,26 @@ task.spawn(function()
 				head = head .. ("  · รีเซ็ตอีก %ds"):format(left)
 			end
 
-			overlayHead = table.concat({
+			local rows = {
 				head,
 				("ได้ %d · พลาด %d · ฟัก %d · ขาย %d · อัปฐาน %d")
 					:format(Stats.stolen, Stats.failed, Stats.hatched, Stats.sold, Stats.upgrades),
 				("ฐาน Lv%s · คอก %s ช่อง · มีสัตว์ %d ตัว · $%s")
 					:format(tostring(lvl), tostring(cap), pets, comma(money or 0)),
-			}, "\n")
+			}
+
+			-- โชว์เหตุผลที่พลาดล่าสุด ให้เห็นบนจอโดยไม่ต้องเปิดแผง UI
+			--
+			-- ตัวเลข "พลาด 12" อย่างเดียวไล่สาเหตุไม่ได้ ต้องรู้ว่าพลาดเพราะอะไร
+			-- โชว์เฉพาะ 15 วิล่าสุด ไม่งั้นข้อความเก่าค้างบนจอทั้งที่แก้ไปแล้ว
+			-- และตัดที่ 70 ตัวอักษร กันข้อความยาวดันผังจอเบี้ยว
+			if Hub.LastWhy and Hub.LastWhyAt and os.clock() - Hub.LastWhyAt < 15 then
+				local why = tostring(Hub.LastWhy)
+				if #why > 70 then why = why:sub(1, 67) .. "..." end
+				rows[#rows + 1] = "เหตุผลล่าสุด: " .. why
+			end
+
+			overlayHead = table.concat(rows, "\n")
 			renderOverlay()
 		end)
 		task.wait(0.6)
