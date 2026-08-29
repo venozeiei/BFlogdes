@@ -827,6 +827,21 @@ local Config = {
 	--
 	-- ปิดตัวนี้แล้วลู่วิ่งยังทำงานปกติ  เพราะแยก Hub.rideIfWorth ออกมาแล้ว
 	CollectEggs = true,
+
+	-- โหมดเน้นวิ่ง  ยืนวิ่งลู่เป็นหลัก ออกไปเก็บไข่ต่อเมื่อมีใบที่แพงกว่าคอกเราเท่านั้น
+	--
+	-- ต่างจากโหมดปกติที่เก็บไข่ก่อนแล้วค่อยวิ่ง  โหมดนี้กลับกัน:
+	-- วิ่งไปเรื่อยๆ คอยชะเง้อดูสนามทุกไม่กี่วินาที ถ้าเจอไข่ที่แพงกว่า
+	-- ตัวอ่อนสุดในคอก ค่อยลงไปเก็บ (ได้อัปเกรดคอกจริงๆ) แล้วกลับขึ้นวิ่งต่อ
+	-- ถ้าไม่มีใบไหนแพงกว่าของในคอก ก็ไม่ต้องลงจากลู่วิ่งเลย
+	--
+	-- เกณฑ์ "แพงกว่าคอก" ใช้ worthGoing เดิม (คอกเต็ม = rate > ตัวอ่อนสุด)
+	-- จึงต้องเปิด SkipWeak ด้วยถึงจะกรองจริง  ไม่งั้นถือว่าทุกใบคุ้มหมด
+	RunFirst = false,
+
+	-- โหมดเน้นวิ่ง: ชะเง้อดูสนามทุกกี่วินาทีระหว่างวิ่ง
+	-- ถี่ไปเปลืองการยิงเซิร์ฟ  ห่างไปกว่าจะเห็นไข่ดีก็โดนคนอื่นเก็บ
+	RunFirstScan = 4,
 }
 Hub.Config = Config
 
@@ -7487,6 +7502,28 @@ local function worthGoing(rate)
 	return rate > weakest.mps, weakest.mps
 end
 
+-- ไข่ใบนี้แพงกว่าตัวอ่อนสุดในคอกไหม  (ใช้กับโหมดเน้นวิ่งโดยเฉพาะ)
+--
+-- แยกจาก worthGoing เพราะ worthGoing เทียบกับคอกก็ต่อเมื่อ SkipWeak เปิด
+-- ถ้าปิดจะคืน true ทุกใบ  โหมดเน้นวิ่งต้องเทียบคอกเสมอไม่ว่า SkipWeak จะเปิดไหม
+-- ไม่งั้นจะออกไปเก็บทุกใบ = ไม่ได้เน้นวิ่งจริง
+--
+-- คืน (แพงกว่าไหม, เรตของตัวที่ต้องสู้)  เพื่อเอาไปโชว์เหตุผลได้
+Hub.beatsPen = function(rate)
+	rate = tonumber(rate) or 0
+	local cap = equipCap()
+	local pets = myPets()
+	-- คอกยังไม่เต็ม: ช่องว่างทำเงินได้ $0 ไข่ที่มีค่าอะไรก็เพิ่มทั้งนั้น
+	-- แต่กันไข่ขยะด้วยเกณฑ์ขั้นต่ำถ้าตั้งไว้
+	if #pets < cap then
+		local floor = math.max(0, tonumber(Config.MinEggRate) or 0)
+		return rate > floor, floor
+	end
+	local weakest = pets[cap]
+	if not weakest then return rate > 0, 0 end
+	return rate > weakest.mps, weakest.mps
+end
+
 --==================================================================
 -- อัปเกรดฐาน (ใช้เงินในเกม ไม่ใช่ Robux)
 -- ราคาต่อเลเวล: 0/1k/1M/75M/500M/1B/50B/500B/1T/25T/100T/500T  สูงสุดเลเวล 11
@@ -7548,6 +7585,14 @@ Hub.rideIfWorth = function()
 
 	if left ~= nil and left > need then
 		pcall(Hub.rideTreadmill)
+
+		-- โหมดเน้นวิ่ง: ลงจากลู่เพราะเจอไข่แพงกว่าคอก ไม่ใช่วิ่งจบรอบ
+		-- ห้ามตั้ง RideDoneAt ไม่งั้นตัวกั้นจะห้ามเก็บไข่จนกว่าจะรีเซ็ต
+		-- ปล่อยให้ cycle ไหลไปเก็บใบนั้น แล้วรอบถัดไปจะขึ้นวิ่งใหม่เอง
+		if Hub.RideBail == "เจอไข่แพงกว่าคอก - ลงไปเก็บ" then
+			return true
+		end
+
 		-- วิ่งจบแล้วห้ามออกไปเก็บไข่อีกจนกว่าไข่จะรีเซ็ต
 		--
 		-- รอบหนึ่งเก็บแค่ top5 ครั้งเดียว แล้ววิ่งยาวจนใกล้กลางคืน
@@ -8098,6 +8143,23 @@ Hub.rideTreadmill = function()
 		if left ~= nil and left <= leaveAt then Hub.RideBail = "ถึงเวลารีเซ็ต" break end
 		-- อ่านเวลาไม่ได้เลย อย่าค้างอยู่ตลอดกาล
 		if left == nil and os.clock() - t0 > 240 then Hub.RideBail = "อ่านเวลาไม่ได้" break end
+
+		-- โหมดเน้นวิ่ง: ชะเง้อดูสนามระหว่างวิ่ง ถ้ามีไข่แพงกว่าคอกก็ลงไปเก็บ
+		--
+		-- findEgg -> rankedEggs อ่านอย่างเดียว ไม่แตะตัวละคร เรียกตอนวิ่งได้ปลอดภัย
+		-- (ต่างจากการเขียน CFrame/move ที่ทำให้หลุดลู่ ตัวนี้แค่จัดอันดับไข่)
+		-- worthGoing คืน true เฉพาะตอนไข่ดีสุดแพงกว่าตัวอ่อนสุดในคอก (ตอนคอกเต็ม)
+		-- เจอแล้ว break ออกไปให้ cycle เก็บ  rideIfWorth จะไม่ตั้ง RideDoneAt กรณีนี้
+		if Config.RunFirst and (not Hub.RideScoutAt
+			or os.clock() - Hub.RideScoutAt >= (tonumber(Config.RunFirstScan) or 4)) then
+			Hub.RideScoutAt = os.clock()
+			local egg, rate = findEgg(Config.Area)
+			if egg and Hub.beatsPen(rate) then
+				Hub.RideBail = "เจอไข่แพงกว่าคอก - ลงไปเก็บ"
+				Hub.RunFirstHop = (Hub.RunFirstHop or 0) + 1
+				break
+			end
+		end
 		-- กล่องขึ้นจริงก็ออก
 		-- เช็คหน้าต่างรีเซ็ตแค่ทุก 10 วินาที ไม่ใช่ทุกวินาที
 		--
@@ -8656,9 +8718,16 @@ local function warpCycle()
 	rate = rate or 0
 
 	local worth, floorRate = worthGoing(rate)
-	-- เพิ่งรีเซ็ต: เดิมเก็บก่อนไม่ต้องเทียบ เพราะไข่หายไปเองเมื่อถึงเช้า
-	-- แต่ถ้าเวฟใหม่มีแต่ของกากก็ไม่ควรวิ่งไปเก็บอยู่ดี ยืนรอเวฟถัดไปคุ้มกว่า
-	if fieldIsFresh() and Config.SkipWorseThanPen == false then worth = true end
+
+	-- โหมดเน้นวิ่ง: ตัดสินด้วยการเทียบคอกตรงๆ ไม่ว่า SkipWeak จะเปิดไหม
+	-- และไม่เอาข้อยกเว้น "เพิ่งรีเซ็ตเก็บก่อน" มาใช้ เพราะจะกลายเป็นเก็บทุกใบ
+	if Config.RunFirst then
+		worth, floorRate = Hub.beatsPen(rate)
+	else
+		-- เพิ่งรีเซ็ต: เดิมเก็บก่อนไม่ต้องเทียบ เพราะไข่หายไปเองเมื่อถึงเช้า
+		-- แต่ถ้าเวฟใหม่มีแต่ของกากก็ไม่ควรวิ่งไปเก็บอยู่ดี ยืนรอเวฟถัดไปคุ้มกว่า
+		if fieldIsFresh() and Config.SkipWorseThanPen == false then worth = true end
+	end
 	if not worth then
 		-- ไม่มีไข่คุ้มให้เก็บ = เวลาว่าง เอาไปทำงานบ้านให้จบเลย
 		-- แต่ต้องมีงานจริงก่อนถึงจะเข้าแปลง ไม่งั้นวาปไปยืนเฉยๆ ทุกรอบ
@@ -8670,6 +8739,22 @@ local function warpCycle()
 			Hub.Phase = "ไม่มีไข่คุ้ม - จัดการฐานแทน"
 			tendBase()
 			move(warpHome)
+		end
+
+		-- โหมดเน้นวิ่ง: ไม่มีไข่แพงกว่าคอก = ขึ้นไปวิ่งลู่ ไม่ต้องยืนรอเฉยๆ
+		--
+		-- ต่างจากโหมดปกติที่ยืนรอไข่ดีๆ อยู่กลางสนาม  โหมดนี้ให้ไปวิ่งสะสม speed
+		-- ตัววิ่งลู่จะชะเง้อดูสนามเองระหว่างวิ่ง เจอไข่แพงกว่าคอกค่อยลงมา (ดู ride loop)
+		-- rideIfWorth ตั้ง RideDoneAt เมื่อวิ่งยาวจนใกล้รีเซ็ตเท่านั้น จึงไม่กั้นการเก็บ
+		if Config.RunFirst then
+			Hub.Phase = "เน้นวิ่ง - ไม่มีไข่แพงกว่าคอก ขึ้นไปวิ่งลู่"
+			if not Hub.rideIfWorth() then
+				-- ขึ้นลู่ไม่ได้ (เวลาเหลือน้อย/หาแปลงไม่เจอ) กลับไปยืนจุดกลางแล้วรอ
+				local _, hR = char()
+				if hR and (hR.Position - warpHome).Magnitude > 20 then move(warpHome) end
+				task.wait(1)
+			end
+			return nil
 		end
 
 		-- ต้องกลับไปยืนรอที่จุดกลางเสมอ ห้ามยืนค้างหน้าแปลง
@@ -10198,6 +10283,16 @@ local function buildUI(A)
 		Config.RideTreadmill ~= false, function(v)
 			Config.RideTreadmill = v
 			log(v and "เปิดการวิ่งลู่" or "ปิดการวิ่งลู่")
+		end)
+	A.toggle("โหมดเน้นวิ่ง", "วิ่งลู่เป็นหลัก ออกไปเก็บเฉพาะไข่ที่แพงกว่าคอกเรา",
+		Config.RunFirst == true, function(v)
+			Config.RunFirst = v
+			-- เปิดโหมดนี้ต้องเปิดวิ่งลู่ด้วย ไม่งั้นไม่มีที่ให้ไปวิ่ง
+			if v then Config.RideTreadmill = true end
+			-- ค้างธง "วิ่งครบรอบแล้ว" อยู่จะไม่ชะเง้อดูไข่ กดแล้วต้องเริ่มดูเลย
+			Hub.RideDoneAt = nil
+			log(v and "เปิดโหมดเน้นวิ่ง - เก็บเฉพาะไข่แพงกว่าคอก"
+				or "ปิดโหมดเน้นวิ่ง - เก็บไข่ตามปกติ")
 		end)
 
 	setStatus = A.label("สถานะ", "อัปเดตทุกครึ่งวินาที")
