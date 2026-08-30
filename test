@@ -8160,6 +8160,30 @@ Hub.rideTreadmill = function()
 				break
 			end
 		end
+
+		-- ขยับตำแหน่ง xz จริงเป็นระยะ กันเกม AFK-teleport ย้ายเซิฟ
+		--
+		-- เอเจนต์ขุดโค้ดเกมเจอ: FFlags/Custom.luau มี AntiAFKMoveTime "Move Seconds"
+		-- + AntiAFKServer "Server Tracking" = เกมจับ AFK จาก "ตำแหน่งไม่ขยับ" ฝั่งเซิร์ฟ
+		-- ไม่ใช่จาก input  การกดปุ่ม/คลิกจึงไม่ช่วย ต้องขยับตำแหน่งจริง
+		--
+		-- RunFirst ยืนนิ่งบนลู่ xz ค้าง = โดนย้ายเซิฟ (ลูกค้าเจอที่ ~150 วิ)
+		-- โหมด false วาปเก็บไข่ตลอด xz เปลี่ยน = ไม่โดน (บังเอิญ ไม่ใช่ anti-afk)
+		--
+		-- ทุก AfkMoveEvery วิ ดันตัวออก ~6 studs ค้างครึ่งวิ (ให้เซิร์ฟ replicate เห็น)
+		-- แล้วดึงกลับ  เปิดเกราะ impulse ก่อนขยับ กัน BAC  6 studs อยู่ในกล่องลู่ ไม่หลุด
+		if os.clock() - (Hub.AfkMoveAt or -1e9) >= (tonumber(Config.AfkMoveEvery) or 90) then
+			Hub.AfkMoveAt = os.clock()
+			local _, hAfk = char()
+			if hAfk then
+				local base = hAfk.Position
+				pcall(Hub.armImpulse, hAfk)
+				Hub.PinPos, Hub.PinUntil = base + Vector3.new(6, 0, 0), os.clock() + 0.7
+				task.wait(0.5)
+				Hub.PinPos, Hub.PinUntil = base, os.clock() + 0.3
+				Hub.AfkMoves = (Hub.AfkMoves or 0) + 1
+			end
+		end
 		-- กล่องขึ้นจริงก็ออก
 		-- เช็คหน้าต่างรีเซ็ตแค่ทุก 10 วินาที ไม่ใช่ทุกวินาที
 		--
@@ -10787,9 +10811,12 @@ pcall(function()
 		if not Config.AntiAFK or not alive() then return end
 		local clicked = false
 		if VU then
+			-- กดปุ่ม LeftControl แทนคลิกเมาส์ (กันไปโดนปุ่ม UI ตอนย่อจอเล็ก)
 			clicked = pcall(function()
-				VU:CaptureController()
-				VU:ClickButton2(Vector2.new())
+				local VIM = game:GetService("VirtualInputManager")
+				VIM:SendKeyEvent(true, Enum.KeyCode.LeftControl, false, game)
+				task.wait()
+				VIM:SendKeyEvent(false, Enum.KeyCode.LeftControl, false, game)
 			end)
 		end
 		if clicked then Hub.AntiAfkFired = (Hub.AntiAfkFired or 0) + 1 ; return end
@@ -10831,20 +10858,27 @@ if Config.AntiAFK ~= false then
 			if Config.AntiAFK ~= false and os.clock() - last >= every then
 				last = os.clock()
 				local ok = false
-				if VU then
+				-- กดปุ่ม "LeftControl" แทนการคลิกเมาส์
+				--
+				-- ผู้ใช้กังวล: ClickButton2 คลิกที่มุม (0,0) ซึ่งเป็นที่อยู่ของปุ่ม
+				-- เมนู/แชท/กระเป๋า/ตั้งค่าบนมุมจอ  ถ้าย่อจอเล็กมากอาจไปโดนปุ่มพวกนั้น
+				-- กดปุ่มคีย์บอร์ดไม่มีตำแหน่งเมาส์ จึงไม่มีทางไปโดนปุ่ม UI ไม่ว่าจอเล็กแค่ไหน
+				-- LeftControl ไม่ทำอะไรในเกม และไม่ใช่ Shift ที่เปิดแชท
+				pcall(function()
+					local VIM = game:GetService("VirtualInputManager")
+					VIM:SendKeyEvent(true, Enum.KeyCode.LeftControl, false, game)
+					task.wait()
+					VIM:SendKeyEvent(false, Enum.KeyCode.LeftControl, false, game)
+					ok = true
+				end)
+				
+				-- สำรอง: ตัวรันไม่มี VirtualInputManager ใช้ VirtualUser คลิกขวา (Button2)
+				-- คลิกขวาไม่ทริกเกอร์ปุ่ม UI (ปุ่มบนมุมจอตอบเฉพาะคลิกซ้าย)
+				if not ok and VU then
 					ok = pcall(function()
 						VU:CaptureController()
-						VU:ClickButton2(Vector2.new())   -- กดลง
-						VU:ClickButton2(Vector2.new())   -- ปล่อย (กันบางตัวรันค้างปุ่ม)
-					end)
-				end
-				-- ตัวรันไม่มี VirtualUser: ลองดีด key ผ่าน VirtualInputManager
-				if not ok then
-					pcall(function()
-						local VIM = game:GetService("VirtualInputManager")
-						VIM:SendKeyEvent(true, Enum.KeyCode.LeftControl, false, game)
-						VIM:SendKeyEvent(false, Enum.KeyCode.LeftControl, false, game)
-						ok = true
+						VU:Button2Down(Vector2.new(0, 0))
+						VU:Button2Up(Vector2.new(0, 0))
 					end)
 				end
 				if ok then
