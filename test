@@ -8146,15 +8146,15 @@ Hub.rideTreadmill = function()
 
 		-- โหมดเน้นวิ่ง: ชะเง้อดูสนามระหว่างวิ่ง ถ้ามีไข่แพงกว่าคอกก็ลงไปเก็บ
 		--
-		-- อ่านไข่ดีสุดจาก Hub.TopFieldEgg ที่ลูปกระดานคำนวณไว้ให้แล้ว (ทุก 5 วิ)
-		-- ไม่เรียก findEgg/rankedEggs ซ้ำ = ไม่มีงานหนักเพิ่ม เบาพอกับโหมด false
-		-- beatsPen เทียบว่าแพงกว่าตัวอ่อนสุดในคอกไหม  เจอแล้ว break ให้ cycle เก็บ
-		-- (เช็คทุก RunFirstScan วิ เพราะ beatsPen อ่าน Save/เรียงสัตว์ ไม่ควรเช็คทุกเฟรม)
-		if Config.RunFirst and Hub.TopFieldEgg and (not Hub.RideScoutAt
+		-- findEgg -> rankedEggs อ่านอย่างเดียว ไม่แตะตัวละคร เรียกตอนวิ่งได้ปลอดภัย
+		-- (ต่างจากการเขียน CFrame/move ที่ทำให้หลุดลู่ ตัวนี้แค่จัดอันดับไข่)
+		-- worthGoing คืน true เฉพาะตอนไข่ดีสุดแพงกว่าตัวอ่อนสุดในคอก (ตอนคอกเต็ม)
+		-- เจอแล้ว break ออกไปให้ cycle เก็บ  rideIfWorth จะไม่ตั้ง RideDoneAt กรณีนี้
+		if Config.RunFirst and (not Hub.RideScoutAt
 			or os.clock() - Hub.RideScoutAt >= (tonumber(Config.RunFirstScan) or 4)) then
 			Hub.RideScoutAt = os.clock()
-			local top = Hub.TopFieldEgg
-			if top.rate and Hub.beatsPen(top.rate) then
+			local egg, rate = findEgg(Config.Area)
+			if egg and Hub.beatsPen(rate) then
 				Hub.RideBail = "เจอไข่แพงกว่าคอก - ลงไปเก็บ"
 				Hub.RunFirstHop = (Hub.RunFirstHop or 0) + 1
 				break
@@ -10625,15 +10625,6 @@ task.spawn(function()
 	while alive() do
 		pcall(function()
 			local ranked = rankedEggs(Config.Area)
-
-			-- เก็บไข่ดีสุดไว้ให้โหมดเน้นวิ่งอ่าน  ไม่ต้องจัดอันดับซ้ำเอง
-			--
-			-- ของเดิมตัวชะเง้อของ RunFirst เรียก findEgg -> rankedEggs เองทุก 4 วิ
-			-- = จัดอันดับไข่ทั้งสนามซ้ำอีกชุด ทั้งที่กระดานนี้ทำอยู่แล้วทุก 5 วิ
-			-- ผู้ใช้ทัก: "RunFirst ทำงานหนักกว่า false ไปทำไม"  ถูกต้อง ไม่ควรหนักกว่า
-			-- ให้ RunFirst อ่านค่านี้แทน = ไม่มีงานเพิ่ม แค่เอาผลที่มีอยู่มาเทียบคอก
-			Hub.TopFieldEgg = ranked[1]
-
 			local rows = {}
 			for i = 1, 3 do
 				local e = ranked[i]
@@ -10731,72 +10722,15 @@ end)
 --
 -- ของเดิมใช้ บริการจำลองอินพุตของ CoreScript ซึ่งเป็นวิธีมาตรฐาน
 -- แต่ บริการจำลองอินพุต เป็นบริการต้องห้าม แค่เรียกก็โดนเตะข้อหาโกงใน 10 วินาที
--- Roblox เตะคน "ไม่มีอินพุต" ทุก 20 นาที ไม่ใช่คน "ไม่ขยับตัวละคร"
+-- (ดูบันทึกการวัดที่หัวไฟล์ ตรงที่ถอด GetService ออก)
 --
--- ของเดิมขยับ CFrame ตอน Idled ซึ่งไม่ช่วยเลย เพราะ Roblox นับ AFK จาก
--- อินพุตเมาส์/คีย์บอร์ด (UserInputService) ไม่ใช่การเคลื่อนที่ของตัวละคร
--- เราเขียน CFrame เองไม่นับเป็นอินพุต ตัวนับ idle จึงเดินต่อจนครบ 20 นาที
--- แล้วเซิร์ฟเตะออก "disconnected due to inactivity" ตัวรันก็รีจอยเอง = "ย้ายเซิฟเฉยๆ"
---
--- โดยเฉพาะโหมดเน้นวิ่ง (RunFirst) ที่ยืนนิ่งบนลู่นานๆ เข้าเงื่อนไข idle ง่ายกว่า
--- โหมดปกติที่วิ่งวุ่นตลอด  ลูกค้าเลยเจอว่า RunFirst=false แล้วหาย
--- (แต่ตัวการจริงคือ anti-AFK พัง ไม่ใช่ RunFirst)
---
--- ทางที่ดีที่สุด: ปิด "ตัวจับ idle ของ Roblox" ทิ้งเลย
---
--- getconnections(LocalPlayer.Idled) คืน connection ของ core script ที่คอยเตะ
--- (วัดสด: มี 2 ตัว)  Disable() มันทิ้ง = Idled ยิงมาก็ไม่มีใครเตะ
--- ดีกว่า VirtualUser ตรงที่ไม่ต้องแข่งจังหวะ ปิดกลไกเตะทิ้งตั้งแต่แรก
--- ปลอดภัยกับ BAC เพราะ Idled เป็นระบบของ Roblox ไม่เกี่ยวกับตัวจับโกงของเกม
--- (BAC จับการเคลื่อนที่ ไม่ได้ดู connection ของ Idled)
---
--- ตัวรันไม่มี getconnections ค่อยตกไปใช้ VirtualUser (จำลองคลิกขวา = อินพุตจริง)
+-- แทนด้วยการขยับตัวเองนิดเดียวเมื่อเกมแจ้งว่าเราอยู่เฉยๆ นานเกินไป
+-- Roblox นับ AFK จาก "ไม่มีอินพุต" แต่การขยับตัวละครก็รีเซ็ตตัวนับให้เหมือนกัน
+-- ฟาร์มที่วิ่งอยู่ตลอดแทบไม่มีทางเข้าเงื่อนไขนี้ ตัวนี้เป็นแค่ตาข่ายกันเหนียว
 local afkConn
-
-local function killIdleKick()
-	if type(getconnections) ~= "function" then return 0 end
-	local n = 0
-	pcall(function()
-		for _, c in pairs(getconnections(LocalPlayer.Idled)) do
-			if type(c.Disable) == "function" then
-				pcall(function() c:Disable() end)
-				n = n + 1
-			end
-		end
-	end)
-	return n
-end
-
 pcall(function()
-	if Config.AntiAFK ~= false and killIdleKick() > 0 then
-		Hub.AntiAfkMode = "ปิด connection"
-		-- เกิดใหม่ทีนึง Roblox อาจต่อตัวจับ idle กลับมา  ปิดซ้ำหลัง respawn
-		LocalPlayer.CharacterAdded:Connect(function()
-			task.wait(1)
-			if Config.AntiAFK ~= false then Hub.AntiAfkKilled = killIdleKick() end
-		end)
-		Hub.AntiAfkKilled = 2
-		return
-	end
-
-	-- ตกมาที่นี่ = ตัวรันไม่มี getconnections  ใช้ VirtualUser ตอบ Idled แทน
-	Hub.AntiAfkMode = "VirtualUser"
-	local VU
-	pcall(function() VU = game:GetService("VirtualUser") end)
 	afkConn = LocalPlayer.Idled:Connect(function()
 		if not Config.AntiAFK or not alive() then return end
-		local clicked = false
-		if VU then
-			-- กดปุ่ม LeftControl แทนคลิกเมาส์ (กันไปโดนปุ่ม UI ตอนย่อจอเล็ก)
-			clicked = pcall(function()
-				local VIM = game:GetService("VirtualInputManager")
-				VIM:SendKeyEvent(true, Enum.KeyCode.LeftControl, false, game)
-				task.wait()
-				VIM:SendKeyEvent(false, Enum.KeyCode.LeftControl, false, game)
-			end)
-		end
-		if clicked then Hub.AntiAfkFired = (Hub.AntiAfkFired or 0) + 1 ; return end
-		-- สำรองสุดท้าย: ขยับตัวนิดเดียว
 		pcall(function()
 			local _, hrp = char()
 			if hrp then
@@ -10805,67 +10739,8 @@ pcall(function()
 				hrp.CFrame = hrp.CFrame - Vector3.new(0, 0.15, 0)
 			end
 		end)
-		Hub.AntiAfkNudge = (Hub.AntiAfkNudge or 0) + 1
 	end)
 end)
-
--- ดีดอินพุตเชิงรุกทุก AntiAfkEvery วินาที  (แก้ AFK-teleport ของเกม)
---
--- เจอในโค้ดเกม: มีรีโมท Analytics:ReportAfkState / ReportAfkTeleport
--- = เกมจับ AFK แล้ว "ย้ายเซิฟ" ผู้เล่นเอง  (ไม่ใช่ BAC ไม่ใช่ idle ของ Roblox)
--- ตัว client เป็นคนรายงาน = จับจาก "ไม่มีอินพุต" ล้วนๆ
--- เพราะงั้นปิด Player.Idled ไม่ช่วย (คนละระบบ) และรอ Idled ยิงก็ไม่ทัน
--- (Idled = 20 นาที แต่เกมน่าจะจับที่ 3-5 นาที)
---
--- หลักฐานจาก trace ลูกค้า: ยืนลู่วิ่ง xz ค้างที่เดิม arm ไม่ขยับ 150 วิรวด
--- threat Trusted evidence 0/0/0 = ไม่ใช่โกง แค่ "ไม่ขยับ" นานเกิน
--- โดยเฉพาะโหมด RunFirst ที่ยืนนิ่งบนลู่นานสุด = โดนบ่อยสุด
---
--- ทางแก้: ดีดอินพุตจริงเป็นระยะ ไม่รอ Idled  ผู้ใช้สั่งทุก 150 วิ
--- VirtualUser:ClickButton2 = คลิกขวาที่ (0,0) ทริกเกอร์ UserInputService
--- รีเซ็ตตัวนับ AFK ของเกม  ไม่ขยับตัวละคร จึงไม่กระทบ BAC/ลู่วิ่ง
-if Config.AntiAFK ~= false then
-	task.spawn(function()
-		local VU
-		pcall(function() VU = game:GetService("VirtualUser") end)
-		local every = math.max(15, tonumber(Config.AntiAfkEvery) or 150)
-		local last = os.clock()
-		while genv.EGG_FARM_GEN == GEN and Hub.Alive ~= false do
-			if Config.AntiAFK ~= false and os.clock() - last >= every then
-				last = os.clock()
-				local ok = false
-				-- กดปุ่ม "LeftControl" แทนการคลิกเมาส์
-				--
-				-- ผู้ใช้กังวล: ClickButton2 คลิกที่มุม (0,0) ซึ่งเป็นที่อยู่ของปุ่ม
-				-- เมนู/แชท/กระเป๋า/ตั้งค่าบนมุมจอ  ถ้าย่อจอเล็กมากอาจไปโดนปุ่มพวกนั้น
-				-- กดปุ่มคีย์บอร์ดไม่มีตำแหน่งเมาส์ จึงไม่มีทางไปโดนปุ่ม UI ไม่ว่าจอเล็กแค่ไหน
-				-- LeftControl ไม่ทำอะไรในเกม และไม่ใช่ Shift ที่เปิดแชท
-				pcall(function()
-					local VIM = game:GetService("VirtualInputManager")
-					VIM:SendKeyEvent(true, Enum.KeyCode.LeftControl, false, game)
-					task.wait()
-					VIM:SendKeyEvent(false, Enum.KeyCode.LeftControl, false, game)
-					ok = true
-				end)
-				
-				-- สำรอง: ตัวรันไม่มี VirtualInputManager ใช้ VirtualUser คลิกขวา (Button2)
-				-- คลิกขวาไม่ทริกเกอร์ปุ่ม UI (ปุ่มบนมุมจอตอบเฉพาะคลิกซ้าย)
-				if not ok and VU then
-					ok = pcall(function()
-						VU:CaptureController()
-						VU:Button2Down(Vector2.new(0, 0))
-						VU:Button2Up(Vector2.new(0, 0))
-					end)
-				end
-				if ok then
-					Hub.AntiAfkPokes = (Hub.AntiAfkPokes or 0) + 1
-					Hub.AntiAfkLast = os.clock()
-				end
-			end
-			task.wait(1)
-		end
-	end)
-end
 
 --==================================================================
 -- DESTROY
