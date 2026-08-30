@@ -8147,8 +8147,7 @@ Hub.rideTreadmill = function()
 		-- โหมดเน้นวิ่ง: ชะเง้อดูสนามระหว่างวิ่ง ถ้ามีไข่แพงกว่าคอกก็ลงไปเก็บ
 		--
 		-- findEgg -> rankedEggs อ่านอย่างเดียว ไม่แตะตัวละคร เรียกตอนวิ่งได้ปลอดภัย
-		-- (ต่างจากการเขียน CFrame/move ที่ทำให้หลุดลู่ ตัวนี้แค่จัดอันดับไข่)
-		-- worthGoing คืน true เฉพาะตอนไข่ดีสุดแพงกว่าตัวอ่อนสุดในคอก (ตอนคอกเต็ม)
+		-- beatsPen คืน true เฉพาะตอนไข่ดีสุดแพงกว่าตัวอ่อนสุดในคอก
 		-- เจอแล้ว break ออกไปให้ cycle เก็บ  rideIfWorth จะไม่ตั้ง RideDoneAt กรณีนี้
 		if Config.RunFirst and (not Hub.RideScoutAt
 			or os.clock() - Hub.RideScoutAt >= (tonumber(Config.RunFirstScan) or 4)) then
@@ -10722,15 +10721,69 @@ end)
 --
 -- ของเดิมใช้ บริการจำลองอินพุตของ CoreScript ซึ่งเป็นวิธีมาตรฐาน
 -- แต่ บริการจำลองอินพุต เป็นบริการต้องห้าม แค่เรียกก็โดนเตะข้อหาโกงใน 10 วินาที
--- (ดูบันทึกการวัดที่หัวไฟล์ ตรงที่ถอด GetService ออก)
+-- Roblox เตะคน "ไม่มีอินพุต" ทุก 20 นาที ไม่ใช่คน "ไม่ขยับตัวละคร"
 --
--- แทนด้วยการขยับตัวเองนิดเดียวเมื่อเกมแจ้งว่าเราอยู่เฉยๆ นานเกินไป
--- Roblox นับ AFK จาก "ไม่มีอินพุต" แต่การขยับตัวละครก็รีเซ็ตตัวนับให้เหมือนกัน
--- ฟาร์มที่วิ่งอยู่ตลอดแทบไม่มีทางเข้าเงื่อนไขนี้ ตัวนี้เป็นแค่ตาข่ายกันเหนียว
+-- ของเดิมขยับ CFrame ตอน Idled ซึ่งไม่ช่วยเลย เพราะ Roblox นับ AFK จาก
+-- อินพุตเมาส์/คีย์บอร์ด (UserInputService) ไม่ใช่การเคลื่อนที่ของตัวละคร
+-- เราเขียน CFrame เองไม่นับเป็นอินพุต ตัวนับ idle จึงเดินต่อจนครบ 20 นาที
+-- แล้วเซิร์ฟเตะออก "disconnected due to inactivity" ตัวรันก็รีจอยเอง = "ย้ายเซิฟเฉยๆ"
+--
+-- โดยเฉพาะโหมดเน้นวิ่ง (RunFirst) ที่ยืนนิ่งบนลู่นานๆ เข้าเงื่อนไข idle ง่ายกว่า
+-- โหมดปกติที่วิ่งวุ่นตลอด  ลูกค้าเลยเจอว่า RunFirst=false แล้วหาย
+-- (แต่ตัวการจริงคือ anti-AFK พัง ไม่ใช่ RunFirst)
+--
+-- ทางที่ดีที่สุด: ปิด "ตัวจับ idle ของ Roblox" ทิ้งเลย
+--
+-- getconnections(LocalPlayer.Idled) คืน connection ของ core script ที่คอยเตะ
+-- (วัดสด: มี 2 ตัว)  Disable() มันทิ้ง = Idled ยิงมาก็ไม่มีใครเตะ
+-- ดีกว่า VirtualUser ตรงที่ไม่ต้องแข่งจังหวะ ปิดกลไกเตะทิ้งตั้งแต่แรก
+-- ปลอดภัยกับ BAC เพราะ Idled เป็นระบบของ Roblox ไม่เกี่ยวกับตัวจับโกงของเกม
+-- (BAC จับการเคลื่อนที่ ไม่ได้ดู connection ของ Idled)
+--
+-- ตัวรันไม่มี getconnections ค่อยตกไปใช้ VirtualUser (จำลองคลิกขวา = อินพุตจริง)
 local afkConn
+
+local function killIdleKick()
+	if type(getconnections) ~= "function" then return 0 end
+	local n = 0
+	pcall(function()
+		for _, c in pairs(getconnections(LocalPlayer.Idled)) do
+			if type(c.Disable) == "function" then
+				pcall(function() c:Disable() end)
+				n = n + 1
+			end
+		end
+	end)
+	return n
+end
+
 pcall(function()
+	if Config.AntiAFK ~= false and killIdleKick() > 0 then
+		Hub.AntiAfkMode = "ปิด connection"
+		-- เกิดใหม่ทีนึง Roblox อาจต่อตัวจับ idle กลับมา  ปิดซ้ำหลัง respawn
+		LocalPlayer.CharacterAdded:Connect(function()
+			task.wait(1)
+			if Config.AntiAFK ~= false then Hub.AntiAfkKilled = killIdleKick() end
+		end)
+		Hub.AntiAfkKilled = 2
+		return
+	end
+
+	-- ตกมาที่นี่ = ตัวรันไม่มี getconnections  ใช้ VirtualUser ตอบ Idled แทน
+	Hub.AntiAfkMode = "VirtualUser"
+	local VU
+	pcall(function() VU = game:GetService("VirtualUser") end)
 	afkConn = LocalPlayer.Idled:Connect(function()
 		if not Config.AntiAFK or not alive() then return end
+		local clicked = false
+		if VU then
+			clicked = pcall(function()
+				VU:CaptureController()
+				VU:ClickButton2(Vector2.new())
+			end)
+		end
+		if clicked then Hub.AntiAfkFired = (Hub.AntiAfkFired or 0) + 1 ; return end
+		-- สำรองสุดท้าย: ขยับตัวนิดเดียว
 		pcall(function()
 			local _, hrp = char()
 			if hrp then
@@ -10739,6 +10792,7 @@ pcall(function()
 				hrp.CFrame = hrp.CFrame - Vector3.new(0, 0.15, 0)
 			end
 		end)
+		Hub.AntiAfkNudge = (Hub.AntiAfkNudge or 0) + 1
 	end)
 end)
 
