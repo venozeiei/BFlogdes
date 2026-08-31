@@ -7599,9 +7599,19 @@ Hub.rideIfWorth = function()
 		-- ตำแหน่งเปลี่ยน = รีเซ็ตตัวนับ AFK ของเกม  ห้ามตั้ง RideDoneAt
 		if Hub.RideBail == "ขยับกัน AFK" then
 			pcall(Hub.pinRelease)
-			pcall(move, warpHome)
+			pcall(move, warpHome)   -- วาปมาจุดกลาง (มีเกราะ)
+			-- เดินสัก 1-2 วิ ที่จุดกลาง = การเคลื่อนที่จริงตาม WalkSpeed (ถูกกฎ ไม่ต้องเกราะ)
+			-- เผื่อกรณีเกมนับ "เดินจริง" ไม่ใช่แค่เปลี่ยนตำแหน่ง  แล้วค่อยวาปกลับขึ้นลู่
+			local _, hrpA, humA = char()
+			if hrpA and humA then
+				local base = hrpA.Position
+				pcall(function() humA:MoveTo(base + Vector3.new(12, 0, 0)) end)
+				task.wait(1)
+				pcall(function() humA:MoveTo(base - Vector3.new(12, 0, 0)) end)
+				task.wait(1)
+			end
 			Hub.AfkMoves = (Hub.AfkMoves or 0) + 1
-			return true
+			return true   -- cycle ขึ้นลู่วิ่งใหม่
 		end
 
 		if Hub.RideBail == "เจอไข่แพงกว่าคอก - ลงไปเก็บ" then
