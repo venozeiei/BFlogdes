@@ -4704,9 +4704,8 @@ Hub.rideTreadmill = function()
 			end
 		end
 
-		Hub.Phase = ("ยืนวิ่งสะสม speed - รีเซ็ตอีก %s วิ%s")
-			:format(left and math.floor(left) or "?",
-				(Hub.RideHatched or 0) > 0 and (" · ฟักระหว่างวิ่ง " .. Hub.RideHatched) or "")
+		Hub.Phase = ("ยืนวิ่งสะสม speed%s")
+			:format((Hub.RideHatched or 0) > 0 and (" · ฟักระหว่างวิ่ง " .. Hub.RideHatched) or "")
 
 		task.wait(1)
 	end
@@ -6420,18 +6419,22 @@ task.spawn(function()
 end)
 
 task.spawn(function()
+	local cLvl, cCap, cMoney, cPets, cAt = 0, "?", 0, 0, -math.huge
 	while alive() do
 		pcall(function()
-			local lvl, cap, money = baseInfo()
-			local pets = #myPets()
+			if os.clock() - cAt >= 3 then
+				cLvl, cCap, cMoney = baseInfo()
+				cPets = #myPets()
+				cAt = os.clock()
+			end
 			local text = ("%s  •  %d studs/s\nรอบ %d · ได้ %d · พลาด %d · ฟัก %d · ขาย %d · อัป %d\nฐาน Lv%s (%s ตัว) · มีสัตว์ %d · เงิน $%s")
 				:format(
 					tostring(Hub.Phase), math.floor(Config.Step / Config.Gap),
 					Stats.cycles, Stats.stolen, Stats.failed, Stats.hatched, Stats.sold, Stats.upgrades,
-					tostring(lvl), tostring(cap), pets, comma(money or 0)
+					tostring(cLvl), tostring(cCap), cPets, comma(cMoney or 0)
 				)
-			local left = secondsToReset()
-			if left then text = text .. ("\nรีเซ็ตอีก %ds"):format(left) end
+			local left = Hub.nightIn()
+			if left then text = text .. ("\nรีเซ็ตอีก %ds"):format(math.floor(left)) end
 			if isResetting() then text = text .. "  (กำลังรีเซ็ต)" end
 			setStatus(text)
 			setLogBox(recentLog(6))
@@ -6441,7 +6444,7 @@ task.spawn(function()
 			if isResetting() then
 				head = head .. "  · กำลังรีเซ็ตสนาม"
 			elseif left then
-				head = head .. ("  · รีเซ็ตอีก %ds"):format(left)
+				head = head .. ("  · รีเซ็ตอีก %ds"):format(math.floor(left))
 			end
 
 			local rows = {
@@ -6449,7 +6452,7 @@ task.spawn(function()
 				("ได้ %d · พลาด %d · ฟัก %d · ขาย %d · อัปฐาน %d")
 					:format(Stats.stolen, Stats.failed, Stats.hatched, Stats.sold, Stats.upgrades),
 				("ฐาน Lv%s · คอก %s ช่อง · มีสัตว์ %d ตัว · $%s")
-					:format(tostring(lvl), tostring(cap), pets, comma(money or 0)),
+					:format(tostring(cLvl), tostring(cCap), cPets, comma(cMoney or 0)),
 			}
 
 			if Hub.LastWhy and Hub.LastWhyAt and os.clock() - Hub.LastWhyAt < 15 then
